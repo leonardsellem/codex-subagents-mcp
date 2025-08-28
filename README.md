@@ -145,7 +145,7 @@ tools.call name=validate_agents
 # or
 tools.call name=validate_agents arguments={"dir":"/abs/path/to/agents"}
 ```
-Returns per-file errors/warnings and a summary. Invalid values are flagged; missing `profile` in Markdown is a warning (loader defaults to `reviewer`).
+Returns per-file errors/warnings and a summary. Invalid values are flagged; missing `profile` in Markdown is a warning (loader defaults to `default`).
 
 ## Build, Lint, Test
 

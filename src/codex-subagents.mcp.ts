@@ -163,7 +163,7 @@ function parseFrontmatter(md: string): { attrs: Record<string, string>; body: st
   const body = md.slice(end + 4).replace(/^\s*\n/, '');
   const attrs: Record<string, string> = {};
   for (const line of raw.split(/\r?\n/)) {
-    const m = line.match(/^([A-Za-z0-9_\-]+)\s*:\s*(.+)$/);
+    const m = line.match(/^([A-Za-z0-9_-]+)\s*:\s*(.+)$/);
     if (m) attrs[m[1]] = m[2];
   }
   return { attrs, body };
@@ -181,7 +181,7 @@ export function loadAgentsFromDir(dir?: string): Record<string, AgentSpec> {
       if (entry.endsWith('.md')) {
         const raw = readFileSync(full, 'utf8');
         const { attrs, body } = parseFrontmatter(raw);
-        const profile = (attrs.profile || attrs.agent_profile || 'reviewer').trim();
+        const profile = (attrs.profile || attrs.agent_profile || 'default').trim();
         let approval_policy: ApprovalPolicy | undefined;
         let sandbox_mode: SandboxMode | undefined;
         const ap = attrs.approval_policy?.trim();
@@ -219,7 +219,7 @@ export function loadAgentsFromDir(dir?: string): Record<string, AgentSpec> {
   return out;
 }
 
-export async function delegateHandler(params: DelegateParams) {
+export async function delegateHandler(params: unknown) {
   const parsed = DelegateParamsSchema.parse(params);
   const agentName = parsed.agent;
   const dynamic = loadAgentsFromDir(getAgentsDir());
@@ -293,14 +293,14 @@ export async function delegateHandler(params: DelegateParams) {
 // Implements a narrow slice of MCP sufficient for tools/list and tools/call.
 
 type JsonRpcId = number | string | null;
-type JsonRpcRequest = { jsonrpc: '2.0'; id: JsonRpcId; method: string; params?: any };
-type JsonRpcResponse = { jsonrpc: '2.0'; id: JsonRpcId; result?: any; error?: { code: number; message: string; data?: any } };
+type JsonRpcRequest = { jsonrpc: '2.0'; id: JsonRpcId; method: string; params?: unknown };
+type JsonRpcResponse = { jsonrpc: '2.0'; id: JsonRpcId; result?: unknown; error?: { code: number; message: string; data?: unknown } };
 
 type ToolDef = {
   name: string;
   description: string;
-  inputSchema: any; // JSON Schema
-  handler: (args: any) => Promise<any>;
+  inputSchema: unknown; // JSON Schema
+  handler: (args: unknown) => Promise<unknown>;
 };
 
 class TinyMCPServer {
@@ -323,24 +323,36 @@ class TinyMCPServer {
   private onData(chunk: Buffer) {
     this.buffer = Buffer.concat([this.buffer, chunk]);
     while (true) {
-      const headerEnd = this.buffer.indexOf('\r\n\r\n');
+      const crlfIdx = this.buffer.indexOf('\r\n\r\n');
+      const lfIdx = this.buffer.indexOf('\n\n');
+      let headerEnd = -1;
+      let sepLen = 0;
+      if (crlfIdx !== -1 && (lfIdx === -1 || crlfIdx < lfIdx)) {
+        headerEnd = crlfIdx;
+        sepLen = 4;
+      } else if (lfIdx !== -1) {
+        headerEnd = lfIdx;
+        sepLen = 2;
+      }
       if (headerEnd === -1) break;
+
       const header = this.buffer.slice(0, headerEnd).toString('utf8');
       const match = /Content-Length:\s*(\d+)/i.exec(header);
       if (!match) {
-        // Malformed; drop headers
-        this.buffer = this.buffer.slice(headerEnd + 4);
+        // Malformed; drop headers and continue scanning
+        this.buffer = this.buffer.slice(headerEnd + sepLen);
         continue;
       }
       const len = parseInt(match[1], 10);
-      const total = headerEnd + 4 + len;
+      const total = headerEnd + sepLen + len;
       if (this.buffer.length < total) break;
-      const body = this.buffer.slice(headerEnd + 4, total).toString('utf8');
+
+      const body = this.buffer.slice(headerEnd + sepLen, total).toString('utf8');
       this.buffer = this.buffer.slice(total);
       try {
         const req = JSON.parse(body) as JsonRpcRequest;
         this.handleRequest(req);
-      } catch (e) {
+      } catch {
         // ignore parse error
       }
     }
@@ -375,7 +387,9 @@ class TinyMCPServer {
         return;
       }
       if (req.method === 'tools/call') {
-        const { name, arguments: args } = req.params ?? {};
+        const p = (req.params ?? {}) as { name?: string; arguments?: unknown };
+        const name = p.name;
+        const args = p.arguments;
         if (!name || !this.tools.has(name)) {
           this.writeMessage({
             jsonrpc: '2.0',
@@ -396,11 +410,12 @@ class TinyMCPServer {
               ],
             },
           });
-        } catch (err: any) {
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
           this.writeMessage({
             jsonrpc: '2.0',
             id,
-            error: { code: -32000, message: String(err?.message ?? err) },
+            error: { code: -32000, message: msg },
           });
         }
         return;
@@ -417,18 +432,19 @@ class TinyMCPServer {
         id,
         error: { code: -32601, message: `Method not found: ${req.method}` },
       });
-    } catch (e: any) {
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
       this.writeMessage({
         jsonrpc: '2.0',
         id,
-        error: { code: -32000, message: String(e?.message ?? e) },
+        error: { code: -32000, message: msg },
       });
     }
   }
 }
 
 // Server wiring
-function toJsonSchema(zodSchema: z.ZodTypeAny) {
+function toJsonSchema(_schema: z.ZodTypeAny) {
   // Very small bridge using zod-to-json-schema would be ideal, but to keep
   // dependencies minimal we handwrite the schema here.
   return {
@@ -455,7 +471,7 @@ server.addTool({
   description:
     'Run a named sub-agent as a clean Codex exec with its own persona/profile.',
   inputSchema: toJsonSchema(DelegateParamsSchema),
-  handler: (args: any) => delegateHandler(args),
+  handler: (args: unknown) => delegateHandler(args),
 });
 
 server.addTool({
@@ -482,7 +498,7 @@ export async function validateAgents(dir?: string) {
       ok: false,
       summary: { files: 0, ok: 0, withErrors: 0, withWarnings: 0 },
       error: 'No agents directory configured. Use --agents-dir, CODEX_SUBAGENTS_DIR, or create ./agents',
-      files: [] as any[],
+      files: [] as unknown[],
     };
   }
   if (!existsSync(resolved)) {
@@ -490,7 +506,7 @@ export async function validateAgents(dir?: string) {
       ok: false,
       summary: { files: 0, ok: 0, withErrors: 0, withWarnings: 0 },
       error: `Agents directory not found: ${resolved}`,
-      files: [] as any[],
+      files: [] as unknown[],
     };
   }
   const results: Array<{ file: string; agent_name?: string; ok: boolean; errors: number; warnings: number; issues: ValidationIssue[]; parsed?: Partial<AgentSpec> & { persona_length?: number } }> = [];
@@ -498,7 +514,7 @@ export async function validateAgents(dir?: string) {
     const full = join(resolved, entry);
     if (statSync(full).isDirectory()) continue;
     const issues: ValidationIssue[] = [];
-    let parsed: Partial<AgentSpec> & { persona_length?: number } = {};
+    const parsed: Partial<AgentSpec> & { persona_length?: number } = {};
     let agentName: string | undefined;
     try {
       if (entry.endsWith('.md')) {
@@ -506,8 +522,8 @@ export async function validateAgents(dir?: string) {
         const raw = readFileSync(full, 'utf8');
         const { attrs, body } = parseFrontmatter(raw);
         const profile = (attrs.profile || attrs.agent_profile || '').trim();
-        if (!profile) issues.push({ level: 'warning', code: 'missing_profile', field: 'profile', message: 'profile missing; built-in loader defaults to reviewer' });
-        parsed.profile = profile || 'reviewer';
+        if (!profile) issues.push({ level: 'warning', code: 'missing_profile', field: 'profile', message: 'profile missing; built-in loader defaults to default' });
+        parsed.profile = profile || 'default';
         const ap = attrs.approval_policy?.trim();
         const sm = attrs.sandbox_mode?.trim();
         if (ap && !['never', 'on-request', 'on-failure', 'untrusted'].includes(ap)) {
@@ -522,15 +538,23 @@ export async function validateAgents(dir?: string) {
         parsed.persona_length = persona.length;
       } else if (entry.endsWith('.json')) {
         agentName = basename(entry, '.json');
-        let obj: any;
+        type JsonAgent = {
+          profile?: unknown;
+          approval_policy?: unknown;
+          sandbox_mode?: unknown;
+          persona?: unknown;
+          personaFile?: unknown;
+        };
+        let obj: JsonAgent;
         try {
-          obj = JSON.parse(readFileSync(full, 'utf8'));
-        } catch (e: any) {
-          issues.push({ level: 'error', code: 'json_parse_error', message: String(e?.message ?? e) });
+          obj = JSON.parse(readFileSync(full, 'utf8')) as JsonAgent;
+        } catch (e: unknown) {
+          const msg = e instanceof Error ? e.message : String(e);
+          issues.push({ level: 'error', code: 'json_parse_error', message: msg });
           results.push({ file: entry, agent_name: agentName, ok: false, errors: issues.filter(i => i.level === 'error').length, warnings: issues.filter(i => i.level === 'warning').length, issues });
           continue;
         }
-        const profile = String(obj.profile || '').trim();
+        const profile = String((obj.profile as string | undefined) || '').trim();
         if (!profile) issues.push({ level: 'error', code: 'missing_profile', field: 'profile', message: 'profile is required' });
         else parsed.profile = profile;
         const ap = obj.approval_policy as string | undefined;
@@ -541,9 +565,9 @@ export async function validateAgents(dir?: string) {
         if (sm && !['read-only', 'workspace-write', 'danger-full-access'].includes(sm)) {
           issues.push({ level: 'error', code: 'invalid_sandbox_mode', field: 'sandbox_mode', message: `Invalid sandbox_mode: ${sm}` });
         } else if (sm) parsed.sandbox_mode = sm as SandboxMode;
-        let persona: string | undefined = typeof obj.persona === 'string' ? obj.persona : undefined;
+        let persona: string | undefined = typeof obj.persona === 'string' ? (obj.persona as string) : undefined;
         if (!persona && obj.personaFile) {
-          const p = join(resolved, obj.personaFile);
+          const p = join(resolved, String(obj.personaFile));
           if (!existsSync(p)) {
             issues.push({ level: 'error', code: 'persona_file_missing', field: 'personaFile', message: `personaFile not found: ${p}` });
           } else {
@@ -559,8 +583,9 @@ export async function validateAgents(dir?: string) {
       } else {
         issues.push({ level: 'warning', code: 'unsupported_extension', message: `Skipping unsupported file: ${entry}` });
       }
-    } catch (e: any) {
-      issues.push({ level: 'error', code: 'unhandled', message: String(e?.message ?? e) });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      issues.push({ level: 'error', code: 'unhandled', message: msg });
     }
     const errors = issues.filter(i => i.level === 'error').length;
     const warnings = issues.filter(i => i.level === 'warning').length;
@@ -579,8 +604,12 @@ server.addTool({
   name: 'validate_agents',
   description: 'Validate agent files and report errors/warnings per file.',
   inputSchema: { type: 'object', properties: { dir: { type: 'string' } }, additionalProperties: false },
-  handler: async (args: any) => {
-    const dir = args?.dir as string | undefined;
+  handler: async (args: unknown) => {
+    let dir: string | undefined;
+    if (args && typeof args === 'object' && 'dir' in (args as Record<string, unknown>)) {
+      const v = (args as { dir?: unknown }).dir;
+      if (typeof v === 'string') dir = v;
+    }
     return validateAgents(dir);
   },
 });

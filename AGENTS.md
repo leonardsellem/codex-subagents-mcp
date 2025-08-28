@@ -58,3 +58,4 @@ This repository implements a minimal MCP server that provides Claude‑style sub
 - Validate: `tools.call name=validate_agents`.
 - Invoke: `subagents.delegate(agent="perf", task="<task>")`.
 
+ 
