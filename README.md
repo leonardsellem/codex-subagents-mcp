@@ -18,15 +18,15 @@ npm run build
 npm start
 ```
 
-## Wiring Codex
+## Wiring with Codex CLI
 
-Copy-paste and adjust the absolute path to your build output:
+Build the server and point Codex at the **absolute** path to the compiled entrypoint. Pass the agents directory explicitly so the server doesn't scan until after the handshake:
 
 ```
 # ~/.codex/config.toml
 [mcp_servers.subagents]
 command = "node"
-args    = ["/absolute/path/to/dist/codex-subagents.mcp.js"]
+args    = ["/absolute/path/to/dist/codex-subagents.mcp.js", "--agents-dir", "/absolute/path/to/agents"]
 
 [profiles.reviewer]
 model = "gpt-5"
@@ -158,28 +158,27 @@ npm test
 
 ## E2E Demo
 
-Runs the server over stdio and calls `delegate` for each agent; the tool itself uses the Codex CLI under the hood.
+Automated end-to-end check using the real Codex CLI:
 
 ```
 npm run e2e
 ```
 
-What it does:
-1. Builds the server.
-2. Prints `codex --version` if available.
-3. Starts the MCP server over stdio; calls `tools/list` and then `tools/call delegate` with sample tasks for reviewer/debugger/security.
-4. Pretty-prints the JSON results.
+It will:
+1. Build the project.
+2. Write a temporary `~/.codex/config.toml` pointing to the built server.
+3. Run `/mcp` to verify the server is connected.
+4. Pick the first agent on disk and call `subagents.delegate`.
 
-If `codex` is missing, the result includes a clear error with next steps.
+The script requires `OPENAI_API_KEY` and a working Codex CLI binary.
 
-## Troubleshooting
+## Troubleshooting MCP timeouts
 
 - “codex not found”: Install Codex CLI and ensure it is on PATH. Re-run `npm run e2e`.
-- No output: Check that your profiles in `~/.codex/config.toml` match the names used by this server (`reviewer`, `debugger`, `security`).
-- Large repos: Prefer `git worktree` over `mirror_repo=true` (see `docs/INTEGRATION.md`).
-- MCP hangs: ensure the config uses an **absolute path** to `dist/codex-subagents.mcp.js`.
-- Logs break handshake: only JSON-RPC frames go to stdout; set `DEBUG_MCP=1` for stderr diagnostics.
-- Slow start: agents on disk are loaded lazily after initialization.
+- Timeout on startup: confirm the config points at the absolute `dist/codex-subagents.mcp.js` path and passes `--agents-dir`.
+- Logs on stdout break the handshake. Set `DEBUG_MCP=1` to log timing to stderr only.
+- Large repos: prefer `git worktree` over `mirror_repo=true` (see `docs/INTEGRATION.md`).
+- Slow start: agent files are loaded lazily after initialization.
 
 ## Docs
 
