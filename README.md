@@ -18,7 +18,7 @@ npm run build
 npm start
 ```
 
-## Wiring Codex
+## Wiring with Codex CLI
 
 Copy-paste and adjust the absolute path to your build output:
 
@@ -174,12 +174,15 @@ If `codex` is missing, the result includes a clear error with next steps.
 
 ## Troubleshooting
 
+### MCP timeouts
+- Ensure the config uses an **absolute path** to `dist/codex-subagents.mcp.js`.
+- Verify no logs are written to stdout; set `DEBUG_MCP=1` to log timing to stderr.
+- If Codex CLI still hangs, run with `DEBUG_MCP=1` and check that `initialized` appears promptly (<2s).
+
+### Misc
 - “codex not found”: Install Codex CLI and ensure it is on PATH. Re-run `npm run e2e`.
-- No output: Check that your profiles in `~/.codex/config.toml` match the names used by this server (`reviewer`, `debugger`, `security`).
+- No output: Check that your profiles in `~/.codex/config.toml` match the names used by this server.
 - Large repos: Prefer `git worktree` over `mirror_repo=true` (see `docs/INTEGRATION.md`).
-- MCP hangs: ensure the config uses an **absolute path** to `dist/codex-subagents.mcp.js`.
-- Logs break handshake: only JSON-RPC frames go to stdout; set `DEBUG_MCP=1` for stderr diagnostics.
-- Slow start: agents on disk are loaded lazily after initialization.
 
 ## Docs
 

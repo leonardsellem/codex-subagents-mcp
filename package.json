@@ -11,7 +11,7 @@
     "start": "node dist/codex-subagents.mcp.js",
     "lint": "eslint . --ext .ts",
     "test": "vitest run",
-    "e2e": "tsx scripts/e2e-demo.ts"
+    "e2e": "bash scripts/e2e.sh"
   },
   "keywords": [
     "mcp",

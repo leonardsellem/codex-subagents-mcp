@@ -17,6 +17,7 @@ import { z } from 'zod';
 
 const SERVER_NAME = 'codex-subagents';
 const SERVER_VERSION = '0.1.0';
+const startTime = Date.now();
 
 // Personas and profiles
 type AgentKey = 'reviewer' | 'debugger' | 'security';
@@ -359,19 +360,29 @@ class TinyMCPServer {
     }
   }
 
-  private writeMessage(obj: JsonRpcResponse) {
+  private write(obj: unknown) {
     const payload = Buffer.from(JSON.stringify(obj), 'utf8');
     const header = Buffer.from(`Content-Length: ${payload.length}\r\n\r\n`, 'utf8');
     process.stdout.write(header);
     process.stdout.write(payload);
   }
 
+  private writeMessage(obj: JsonRpcResponse) {
+    this.write(obj);
+  }
+
+  private writeNotification(method: string, params?: unknown) {
+    this.write({ jsonrpc: '2.0', method, params });
+  }
+
   private async handleRequest(req: JsonRpcRequest) {
+    const isNotification = req.id === undefined;
     const id = req.id ?? null;
     try {
       if (req.method === 'initialize') {
+        const now = Date.now();
         if (process.env.DEBUG_MCP) {
-          console.error(`[${new Date().toISOString()}] initialize received`);
+          console.error(`[${new Date().toISOString()}] initialize received (${now - startTime}ms)`);
         }
         const result = {
           protocolVersion: '2024-11-05',
@@ -379,6 +390,10 @@ class TinyMCPServer {
           serverInfo: { name: this.name, version: this.version },
         };
         this.writeMessage({ jsonrpc: '2.0', id, result });
+        this.writeNotification('initialized');
+        if (process.env.DEBUG_MCP) {
+          console.error(`[${new Date().toISOString()}] initialized sent (${Date.now() - startTime}ms)`);
+        }
         return;
       }
       if (req.method === 'tools/list') {
@@ -430,19 +445,23 @@ class TinyMCPServer {
         return;
       }
 
-      // Default: method not found
-      this.writeMessage({
-        jsonrpc: '2.0',
-        id,
-        error: { code: -32601, message: `Method not found: ${req.method}` },
-      });
+      if (!isNotification) {
+        // Default: method not found
+        this.writeMessage({
+          jsonrpc: '2.0',
+          id,
+          error: { code: -32601, message: `Method not found: ${req.method}` },
+        });
+      }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
-      this.writeMessage({
-        jsonrpc: '2.0',
-        id,
-        error: { code: -32000, message: msg },
-      });
+      if (!isNotification) {
+        this.writeMessage({
+          jsonrpc: '2.0',
+          id,
+          error: { code: -32000, message: msg },
+        });
+      }
     }
   }
 }
