@@ -25,7 +25,7 @@ Build the server and point Codex at the **absolute** path to the compiled entryp
 ```
 # ~/.codex/config.toml
 [mcp_servers.subagents]
-command = "node"
+command = "/absolute/path/to/node"
 args    = ["/absolute/path/to/dist/codex-subagents.mcp.js", "--agents-dir", "/absolute/path/to/agents"]
 
 [profiles.reviewer]
@@ -177,6 +177,7 @@ The script requires `OPENAI_API_KEY` and a working Codex CLI binary.
 - “codex not found”: Install Codex CLI and ensure it is on PATH. Re-run `npm run e2e`.
 - Timeout on startup: confirm the config points at the absolute `dist/codex-subagents.mcp.js` path and passes `--agents-dir`.
 - Logs on stdout break the handshake. Set `DEBUG_MCP=1` to log timing to stderr only.
+- The server speaks newline-delimited JSON; older configs expecting HTTP headers will stall.
 - Large repos: prefer `git worktree` over `mirror_repo=true` (see `docs/INTEGRATION.md`).
 - Slow start: agent files are loaded lazily after initialization.
 
