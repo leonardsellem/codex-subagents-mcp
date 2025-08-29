@@ -3,7 +3,7 @@ import { spawn } from 'child_process';
 import { Buffer } from 'buffer';
 
 type Rpc = {
-  send: (method: string, params?: any) => Promise<any>;
+  send: (method: string, params?: unknown) => Promise<unknown>;
   close: () => void;
 };
 
@@ -13,11 +13,12 @@ function startServer(): Rpc {
   });
 
   let buf = Buffer.alloc(0);
-  const pending = new Map<number, (v: any) => void>();
+  const pending = new Map<number, (v: unknown) => void>();
   let id = 1;
 
-  child.stdout.on('data', (chunk) => {
-    buf = Buffer.concat([buf, chunk as Buffer]);
+  child.stdout.on('data', (chunk: Buffer) => {
+    buf = Buffer.concat([buf, chunk]);
+    // eslint-disable-next-line no-constant-condition
     while (true) {
       const headerEnd = buf.indexOf('\r\n\r\n');
       if (headerEnd === -1) break;
@@ -43,8 +44,8 @@ function startServer(): Rpc {
     }
   });
 
-  const send = (method: string, params?: any) =>
-    new Promise<any>((resolve) => {
+  const send = (method: string, params?: unknown) =>
+    new Promise<unknown>((resolve) => {
       const thisId = id++;
       pending.set(thisId, resolve);
       const payload = Buffer.from(
@@ -95,7 +96,8 @@ async function main() {
   const rpc = startServer();
   await rpc.send('initialize', { clientInfo: { name: 'e2e', version: '0' } });
   const list = await rpc.send('tools/list');
-  console.log('Tools:', list.tools.map((t: any) => t.name).join(', '));
+  const listTools = (list as { tools: Array<{ name: string }> }).tools;
+  console.log('Tools:', listTools.map((t) => t.name).join(', '));
 
   const samples = [
     { agent: 'reviewer', task: 'Review the last commit for readability.' },

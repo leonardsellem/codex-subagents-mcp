@@ -107,7 +107,7 @@ export function run(cmd: string, args: string[], cwd?: string): Promise<{ code: 
     child.stdout.on('data', (d) => (stdout += d.toString()));
     child.stderr.on('data', (d) => (stderr += d.toString()));
     child.on('close', (code) => resolve({ code: code ?? 0, stdout, stderr }));
-    child.on('error', (err) => resolve({ code: 127, stdout, stderr: String(err) }));
+    child.on('error', (err: unknown) => resolve({ code: 127, stdout, stderr: String(err) }));
   });
 }
 
@@ -308,8 +308,8 @@ class TinyMCPServer {
   private buffer: Buffer = Buffer.alloc(0);
 
   constructor(private name: string, private version: string) {
-    process.stdin.on('data', (chunk) => this.onData(chunk as Buffer));
-    process.stdin.on('error', (err) => console.error('stdin error', err));
+    process.stdin.on('data', (chunk: Buffer) => this.onData(chunk));
+    process.stdin.on('error', (err: unknown) => console.error('stdin error', err));
   }
 
   addTool(def: ToolDef) {
@@ -322,6 +322,7 @@ class TinyMCPServer {
 
   private onData(chunk: Buffer) {
     this.buffer = Buffer.concat([this.buffer, chunk]);
+    // eslint-disable-next-line no-constant-condition
     while (true) {
       const crlfIdx = this.buffer.indexOf('\r\n\r\n');
       const lfIdx = this.buffer.indexOf('\n\n');
@@ -369,6 +370,9 @@ class TinyMCPServer {
     const id = req.id ?? null;
     try {
       if (req.method === 'initialize') {
+        if (process.env.DEBUG_MCP) {
+          console.error(`[${new Date().toISOString()}] initialize received`);
+        }
         const result = {
           protocolVersion: '2024-11-05',
           capabilities: { tools: {} },
@@ -465,6 +469,9 @@ function toJsonSchema(_schema: z.ZodTypeAny) {
 }
 
 const server = new TinyMCPServer(SERVER_NAME, SERVER_VERSION);
+if (process.env.DEBUG_MCP) {
+  console.error(`[${new Date().toISOString()}] server starting`);
+}
 
 server.addTool({
   name: 'delegate',
