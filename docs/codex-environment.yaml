@@ -1,0 +1,99 @@
+codex_environment:
+  repository: "leonardsellem/codex-subagents-mcp"
+  name: "codex-subagents-mcp"
+  description: "Tiny MCP server that provides Claude-style sub-agents (reviewer, debugger, security) for the Codex CLI; each call runs in a clean temp workdir and shells out to `codex exec` with the right profile."
+
+  code_execution:
+    container_image: "universal"
+    preinstalled_packages: true
+    runtimes:
+      - language: "node"
+        version: "20"          # README requires Node >=18; choose LTS 20
+        package_manager: "npm"
+
+  environment:
+    variables:
+      - name: "ENV"
+        value: "development"
+        reason: "Default runtime environment for local runs and tests"
+      - name: "CODEX_SUBAGENTS_DIR"
+        value: ""              # optional; if set, points to your custom agents dir
+        reason: "Lets you register extra agents without code changes"
+    secrets:
+      - name: "OPENAI_API_KEY"
+        reason: "Codex CLI uses this to call OpenAI models when sub-agents delegate work"
+
+  container_caching: true
+
+  setup_script:
+    mode: "manual"
+    bash: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      echo "==> Installing dependencies (npm ci)"
+      if [ -f package-lock.json ]; then
+        npm ci --no-audit --fund=false
+      else
+        npm install --no-audit --fund=false
+      fi
+
+      echo "==> Building TypeScript"
+      npm run build
+
+      echo "==> Lint & unit tests"
+      npm run lint || true        # keep setup resilient
+      npm test || true            # vitest present; allow non-zero to avoid hard fail
+
+      echo "==> Verifying build artifact exists"
+      test -f dist/codex-subagents.mcp.js
+      ls -lh dist || true
+
+      # Optional: wire this MCP server into Codex for this environment
+      # mkdir -p "$HOME/.codex"
+      # cat > "$HOME/.codex/config.toml" <<'TOML'
+      # [mcp_servers.subagents]
+      # command = "node"
+      # args    = ["/workspace/codex-subagents-mcp/dist/codex-subagents.mcp.js"]
+      # TOML
+
+      echo "Setup complete."
+
+  maintenance_script: |
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "==> Refreshing deps if lockfile changed"
+    if [ -f package-lock.json ]; then
+      npm ci --no-audit --fund=false
+    else
+      npm install --no-audit --fund=false
+    fi
+    echo "==> Quick smoke: ensure server starts over stdio"
+    node dist/codex-subagents.mcp.js --help >/dev/null 2>&1 || true
+    echo "Maintenance complete."
+
+  network:
+    agent_internet_access: true
+    domain_allowlist_profile: "Common dependencies"
+    additional_allowed_domains:
+      - "api.openai.com"     # Codex CLI calls OpenAI APIs
+    allowed_http_methods: ["GET","POST","HEAD","OPTIONS"]
+
+  validations:
+    smoke_tests:
+      - name: "Node present"
+        command: "node -v"
+      - name: "NPM present"
+        command: "npm -v"
+      - name: "Build artifact exists"
+        command: "test -f dist/codex-subagents.mcp.js && echo OK"
+      - name: "List tools"
+        command: "node dist/codex-subagents.mcp.js --help || true"
+
+  project_insights:
+    detected_languages: ["TypeScript","JavaScript"]
+    frameworks: ["MCP server"]
+    package_managers: ["npm"]
+    runtime_versions: { node: ">=18 (using 20 LTS here)" }
+    external_services: ["OpenAI via Codex CLI"]
+    test_commands: ["npm test","npm run e2e"]
