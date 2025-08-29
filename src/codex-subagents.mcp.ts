@@ -145,10 +145,13 @@ export function getAgentsDir(argv: string[] = process.argv, env = process.env): 
     if (idx >= 0 && argv[idx + 1]) return argv[idx + 1];
   }
   if (env.CODEX_SUBAGENTS_DIR) return env.CODEX_SUBAGENTS_DIR;
-  // Common defaults
+  // Common defaults. Prefer explicit, then CWD, then next to the installed server binary.
   const candidates = [
+    // Project-local defaults
     join(process.cwd(), 'agents'),
     join(process.cwd(), '.codex-subagents', 'agents'),
+    // Fallback: alongside the installed server (dist/../agents or src/../agents)
+    join(__dirname, '..', 'agents'),
   ];
   for (const c of candidates) {
     if (existsSync(c)) return c;

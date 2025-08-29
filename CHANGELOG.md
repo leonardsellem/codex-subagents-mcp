@@ -10,4 +10,7 @@ The format is based on Keep a Changelog and this project adheres to SemVer.
 - Zod-validated parameters and isolated temp workdir with persona injection.
 - Build scripts, linting, tests, and e2e demo script.
 - Documentation: README, INTEGRATION, SECURITY, OPERATIONS, ROADMAP.
+## [Unreleased]
+### Fixed
+- `list_agents` now reliably includes custom agents when Codex launches the MCP server from a different CWD by adding a fallback search to `dist/../agents` (alongside the installed binary). This prevents mismatches between `tools.call name=list_agents` and the `agents/` directory contents.
 
