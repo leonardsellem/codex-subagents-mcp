@@ -5,3 +5,5 @@ dist/
 coverage/
 
 .vscode/
+MARKETING.md
+RELEASE_CHECKLIST.md
