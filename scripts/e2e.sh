@@ -15,11 +15,6 @@ command = "node"
 args = ["$SERVER", "--agents-dir", "$AGENTS_DIR"]
 CONFIG
 
-if [[ -z "${OPENAI_API_KEY:-}" ]]; then
-  echo "OPENAI_API_KEY is required" >&2
-  exit 1
-fi
-
 # list connected MCP servers
 echo "Listing MCP servers..." >&2
 LIST_OUTPUT=$(HOME="$TMP_HOME" npx --yes @openai/codex exec "/mcp" 2>&1)
