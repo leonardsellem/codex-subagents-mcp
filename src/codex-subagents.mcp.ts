@@ -17,6 +17,7 @@ import { z } from 'zod';
 
 const SERVER_NAME = 'codex-subagents';
 const SERVER_VERSION = '0.1.0';
+const START_TIME = Date.now();
 
 // Personas and profiles
 type AgentKey = 'reviewer' | 'debugger' | 'security';
@@ -310,6 +311,8 @@ class TinyMCPServer {
   constructor(private name: string, private version: string) {
     process.stdin.on('data', (chunk: Buffer) => this.onData(chunk));
     process.stdin.on('error', (err: unknown) => console.error('stdin error', err));
+    // Ensure the process starts reading immediately
+    process.stdin.resume();
   }
 
   addTool(def: ToolDef) {
@@ -326,32 +329,37 @@ class TinyMCPServer {
     while (true) {
       const crlfIdx = this.buffer.indexOf('\r\n\r\n');
       const lfIdx = this.buffer.indexOf('\n\n');
-      let headerEnd = -1;
-      let sepLen = 0;
-      if (crlfIdx !== -1 && (lfIdx === -1 || crlfIdx < lfIdx)) {
-        headerEnd = crlfIdx;
-        sepLen = 4;
-      } else if (lfIdx !== -1) {
-        headerEnd = lfIdx;
-        sepLen = 2;
-      }
-      if (headerEnd === -1) break;
-
-      const header = this.buffer.slice(0, headerEnd).toString('utf8');
-      const match = /Content-Length:\s*(\d+)/i.exec(header);
-      if (!match) {
-        // Malformed; drop headers and continue scanning
-        this.buffer = this.buffer.slice(headerEnd + sepLen);
+      if (crlfIdx !== -1 || lfIdx !== -1) {
+        const headerEnd = crlfIdx !== -1 && (lfIdx === -1 || crlfIdx < lfIdx) ? crlfIdx : lfIdx;
+        const sepLen = crlfIdx !== -1 && (lfIdx === -1 || crlfIdx < lfIdx) ? 4 : 2;
+        const header = this.buffer.slice(0, headerEnd).toString('utf8');
+        const match = /Content-Length:\s*(\d+)/i.exec(header);
+        if (!match) {
+          // Malformed; drop headers and continue scanning
+          this.buffer = this.buffer.slice(headerEnd + sepLen);
+          continue;
+        }
+        const len = parseInt(match[1], 10);
+        const total = headerEnd + sepLen + len;
+        if (this.buffer.length < total) break;
+        const body = this.buffer.slice(headerEnd + sepLen, total).toString('utf8');
+        this.buffer = this.buffer.slice(total);
+        try {
+          const req = JSON.parse(body) as JsonRpcRequest;
+          this.handleRequest(req);
+        } catch {
+          // ignore parse error
+        }
         continue;
       }
-      const len = parseInt(match[1], 10);
-      const total = headerEnd + sepLen + len;
-      if (this.buffer.length < total) break;
 
-      const body = this.buffer.slice(headerEnd + sepLen, total).toString('utf8');
-      this.buffer = this.buffer.slice(total);
+      const nlIdx = this.buffer.indexOf('\n');
+      if (nlIdx === -1) break;
+      const line = this.buffer.slice(0, nlIdx).toString('utf8').trim();
+      this.buffer = this.buffer.slice(nlIdx + 1);
+      if (!line) continue;
       try {
-        const req = JSON.parse(body) as JsonRpcRequest;
+        const req = JSON.parse(line) as JsonRpcRequest;
         this.handleRequest(req);
       } catch {
         // ignore parse error
@@ -359,19 +367,29 @@ class TinyMCPServer {
     }
   }
 
+  private write(obj: Record<string, unknown>) {
+    const payload = JSON.stringify(obj);
+    process.stdout.write(payload + '\n');
+  }
+
   private writeMessage(obj: JsonRpcResponse) {
-    const payload = Buffer.from(JSON.stringify(obj), 'utf8');
-    const header = Buffer.from(`Content-Length: ${payload.length}\r\n\r\n`, 'utf8');
-    process.stdout.write(header);
-    process.stdout.write(payload);
+    this.write(obj);
+  }
+
+  private writeNotification(method: string, params?: unknown) {
+    this.write({ jsonrpc: '2.0', method, params });
   }
 
   private async handleRequest(req: JsonRpcRequest) {
-    const id = req.id ?? null;
+    const isNotification = req.id === undefined;
+    const id = isNotification ? null : req.id;
     try {
       if (req.method === 'initialize') {
+        const now = Date.now();
         if (process.env.DEBUG_MCP) {
-          console.error(`[${new Date().toISOString()}] initialize received`);
+          console.error(
+            `[${new Date().toISOString()}] initialize received after ${now - START_TIME}ms`,
+          );
         }
         const result = {
           protocolVersion: '2024-11-05',
@@ -379,6 +397,14 @@ class TinyMCPServer {
           serverInfo: { name: this.name, version: this.version },
         };
         this.writeMessage({ jsonrpc: '2.0', id, result });
+        setTimeout(() => {
+          this.writeNotification('initialized');
+          if (process.env.DEBUG_MCP) {
+            console.error(
+              `[${new Date().toISOString()}] initialized sent after ${Date.now() - START_TIME}ms`,
+            );
+          }
+        }, 0);
         return;
       }
       if (req.method === 'tools/list') {
@@ -430,19 +456,23 @@ class TinyMCPServer {
         return;
       }
 
-      // Default: method not found
-      this.writeMessage({
-        jsonrpc: '2.0',
-        id,
-        error: { code: -32601, message: `Method not found: ${req.method}` },
-      });
+      if (!isNotification) {
+        // Default: method not found for requests
+        this.writeMessage({
+          jsonrpc: '2.0',
+          id,
+          error: { code: -32601, message: `Method not found: ${req.method}` },
+        });
+      }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
-      this.writeMessage({
-        jsonrpc: '2.0',
-        id,
-        error: { code: -32000, message: msg },
-      });
+      if (!isNotification) {
+        this.writeMessage({
+          jsonrpc: '2.0',
+          id,
+          error: { code: -32000, message: msg },
+        });
+      }
     }
   }
 }

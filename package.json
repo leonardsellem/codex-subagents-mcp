@@ -11,7 +11,7 @@
     "start": "node dist/codex-subagents.mcp.js",
     "lint": "eslint . --ext .ts",
     "test": "vitest run",
-    "e2e": "tsx scripts/e2e-demo.ts"
+    "e2e": "bash scripts/e2e.sh"
   },
   "keywords": [
     "mcp",
@@ -28,13 +28,14 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@openai/codex": "^0.27.0",
+    "@types/node": "^20.11.30",
     "@typescript-eslint/eslint-plugin": "^7.18.0",
     "@typescript-eslint/parser": "^7.18.0",
     "eslint": "^8.57.0",
-    "yaml": "^2.5.1",
     "tsx": "^4.19.2",
     "typescript": "^5.6.2",
     "vitest": "^1.6.0",
-    "@types/node": "^20.11.30"
+    "yaml": "^2.5.1"
   }
 }
