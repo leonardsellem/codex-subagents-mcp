@@ -1,4 +1,4 @@
-## Integration — codex-subagents-mcp
+# Integration — codex-subagents-mcp
 
 This document explains how to wire the MCP server into Codex CLI and how to guide usage via `AGENTS.md`.
 
@@ -11,7 +11,7 @@ Add the following block to `~/.codex/config.toml`, updating the path to your bui
 command = "node"
 args    = ["/absolute/path/to/dist/codex-subagents.mcp.js"]
 
-[profiles.reviewer]
+[profiles.review]
 model = "gpt-5"
 approval_policy = "on-request"
 sandbox_mode    = "read-only"
@@ -29,7 +29,7 @@ sandbox_mode    = "workspace-write"
 
 Notes:
 - The MCP server runs outside the Codex sandbox. Keep the exposed tools minimal; here there’s only one: `delegate`.
-- Profiles control Codex execution for sub-agents. You can set stricter sandboxing (e.g., `read-only` for reviewer) and different models per agent.
+- Profiles control Codex execution for sub-agents. You can set stricter sandboxing (e.g., `read-only` for review) and different models per agent.
 
 ### How it works
 
@@ -37,7 +37,7 @@ The MCP tool `delegate`:
 1. Creates a temp directory.
 2. Writes an `AGENTS.md` persona tailored to the selected agent.
 3. Optionally mirrors the repo into the temp directory for isolation (`mirror_repo=true`).
-4. Spawns `codex exec --profile <agent> "<task>"` with `cwd` set appropriately.
+4. Spawns `codex exec --profile <agent-profile> "<task>"` with `cwd` set appropriately.
 5. Returns `{ ok, code, stdout, stderr, working_dir }` to the calling thread.
 
 ### Custom agents
@@ -81,7 +81,7 @@ tools.call name=validate_agents
 # Optional directory override
 tools.call name=validate_agents arguments={"dir":"/abs/path/to/agents"}
 ```
-This reports a summary and per-file issues (errors/warnings). Invalid enum values are flagged. Markdown without `profile` yields a warning (runtime loader defaults to `reviewer`).
+This reports a summary and per-file issues (errors/warnings). Invalid enum values are flagged. Markdown without `profile` yields a warning (loader defaults to `default`).
 
 ### Repo guidance (AGENTS.md)
 

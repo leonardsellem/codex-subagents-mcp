@@ -12,7 +12,7 @@ See also: `docs/INTEGRATION.md` (configuration) and `docs/OPERATIONS.md` (operat
 - Shell exec (`codex exec`): Command injection/overbroad execution.
   - Mitigate: Pass only trusted `task` text; avoid untrusted flags; validate agent metadata.
 - Secrets exposure: Reading tokens/keys from workspace or env.
-  - Mitigate: Prefer `read-only` for reviewer agents; scope tasks; use `git worktree` over full mirroring for isolation.
+  - Mitigate: Prefer `read-only` for review agents; scope tasks; use `git worktree` over full mirroring for isolation.
 - Network egress/data exfiltration: Agents leaking data.
   - Mitigate: Use restrictive Codex profiles; keep MCP tool surface minimal; avoid adding networked tools here.
 - Path traversal/unsafe `cwd`: Acting on unintended paths.

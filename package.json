@@ -2,7 +2,7 @@
   "name": "codex-subagents-mcp",
   "version": "0.1.0",
   "private": true,
-  "description": "Minimal MCP server providing Claude-style sub-agents (reviewer, debugger, security) for Codex CLI.",
+  "description": "TypeScript MCP server exposing a single delegate tool to run task-specific sub-agents (review, debugger, security) for Codex CLI.",
   "main": "dist/codex-subagents.mcp.js",
   "type": "commonjs",
   "scripts": {
@@ -15,8 +15,12 @@
   },
   "keywords": [
     "mcp",
+    "mcp-server",
+    "model-context-protocol",
     "codex",
+    "codex-cli",
     "subagents",
+    "sub-agents",
     "anthropic",
     "claude",
     "tools"

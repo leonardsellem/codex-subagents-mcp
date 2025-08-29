@@ -1,7 +1,7 @@
 codex_environment:
   repository: "leonardsellem/codex-subagents-mcp"
   name: "codex-subagents-mcp"
-  description: "Tiny MCP server that provides Claude-style sub-agents (reviewer, debugger, security) for the Codex CLI; each call runs in a clean temp workdir and shells out to `codex exec` with the right profile."
+  description: "Tiny MCP server that provides Claude-style sub-agents (review, debugger, security) for the Codex CLI; each call runs in a clean temp workdir and shells out to `codex exec` with the right profile."
 
   code_execution:
     container_image: "universal"

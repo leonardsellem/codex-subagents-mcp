@@ -28,7 +28,7 @@ npm start
 command = "/absolute/path/to/node"
 args    = ["/absolute/path/to/dist/codex-subagents.mcp.js", "--agents-dir", "/absolute/path/to/agents"]
 
-[profiles.reviewer]
+[profiles.review]
 model = "gpt-5"
 approval_policy = "on-request"
 sandbox_mode    = "read-only"
@@ -46,7 +46,7 @@ sandbox_mode    = "workspace-write"
 
 Usage (in Codex):
 
-- “Review my last commit. Use the reviewer sub-agent.”
+- “Review my last commit. Use the review sub-agent.”
 - “Reproduce and fix the failing tests in api/ using the debugger sub-agent.”
 - “Audit for secrets and unsafe shell calls; propose fixes with rationale using the security sub-agent.”
 
@@ -84,7 +84,7 @@ Note: MCP servers run outside Codex’s sandbox. Keep surfaces narrow and audite
 ## Tool: `delegate`
 
 - Parameters:
-  - `agent`: string — built-in (`reviewer | debugger | security`) or a custom agent name
+  - `agent`: string — e.g., `review | debugger | security` or a custom agent name
   - `task`: string (required)
   - `cwd?`: string (defaults to current working directory)
   - `mirror_repo?`: boolean (default false). If true and `cwd` provided, mirrors the repo into the temp workdir for maximal isolation.

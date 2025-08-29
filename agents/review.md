@@ -1,5 +1,5 @@
 ---
-profile: default
+profile: review
 ---
 
 # Code Reviewer & Refactorer (review)
@@ -15,4 +15,3 @@ Constraints:
 - Enforce consistent style (formatter/linter) and dependency health.
 
 Follow the Shared Protocol and Output Contract. Permissions inherit from the calling conversation.
-
