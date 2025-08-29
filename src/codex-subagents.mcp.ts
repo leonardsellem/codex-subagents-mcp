@@ -136,7 +136,11 @@ export function mirrorRepoIfRequested(srcCwd: string | undefined, dest: string, 
 }
 
 // -------- Dynamic agents loading from directory --------
-export function getAgentsDir(argv: string[] = process.argv, env = process.env): string | undefined {
+export function getAgentsDir(
+  argv: string[] = process.argv,
+  env: NodeJS.ProcessEnv = process.env,
+  currentDir: string = process.cwd(),
+): string | undefined {
   const fromArg = argv.find((a) => a.startsWith('--agents-dir'));
   if (fromArg) {
     const parts = fromArg.split('=');
@@ -148,8 +152,8 @@ export function getAgentsDir(argv: string[] = process.argv, env = process.env): 
   // Common defaults. Prefer explicit, then CWD, then next to the installed server binary.
   const candidates = [
     // Project-local defaults
-    join(process.cwd(), 'agents'),
-    join(process.cwd(), '.codex-subagents', 'agents'),
+    join(currentDir, 'agents'),
+    join(currentDir, '.codex-subagents', 'agents'),
     // Fallback: alongside the installed server (dist/../agents or src/../agents)
     join(__dirname, '..', 'agents'),
   ];
