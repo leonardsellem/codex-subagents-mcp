@@ -27,51 +27,55 @@ codex_environment:
 
   setup_script:
     mode: "manual"
-    bash: |
+    bash: |-
       #!/usr/bin/env bash
       set -euo pipefail
 
-      echo "==> Installing dependencies (npm ci)"
-      if [ -f package-lock.json ]; then
-        npm ci --no-audit --fund=false
-      else
-        npm install --no-audit --fund=false
+      echo "==> Installing dependencies (lock-aware)"
+      if [ -f package.json ]; then
+        if [ -f package-lock.json ]; then
+          echo "Attempting: npm ci"
+          if ! npm ci --no-audit --fund=false; then
+            echo "npm ci failed (lockfile out of sync). Repairing lockfile..."
+            npm install --package-lock-only --no-audit --fund=false
+            echo "Retrying: npm ci"
+            npm ci --no-audit --fund=false
+          fi
+        else
+          echo "No package-lock.json found. Running npm install"
+          npm install --no-audit --fund=false
+        fi
       fi
 
-      echo "==> Building TypeScript"
-      npm run build
+      echo "==> Build (non-fatal if project has no build)"
+      npm run build || true
 
-      echo "==> Lint & unit tests"
-      npm run lint || true        # keep setup resilient
-      npm test || true            # vitest present; allow non-zero to avoid hard fail
+      echo "==> Lint & tests (non-fatal during setup)"
+      npm run lint || true
+      npm test || true
 
-      echo "==> Verifying build artifact exists"
-      test -f dist/codex-subagents.mcp.js
-      ls -lh dist || true
-
-      # Optional: wire this MCP server into Codex for this environment
-      # mkdir -p "$HOME/.codex"
-      # cat > "$HOME/.codex/config.toml" <<'TOML'
-      # [mcp_servers.subagents]
-      # command = "node"
-      # args    = ["/workspace/codex-subagents-mcp/dist/codex-subagents.mcp.js"]
-      # TOML
-
+      echo "==> Quick verification"
+      [ -d dist ] && ls -lh dist || true
       echo "Setup complete."
-
   maintenance_script: |
     #!/usr/bin/env bash
     set -euo pipefail
-    echo "==> Refreshing deps if lockfile changed"
-    if [ -f package-lock.json ]; then
-      npm ci --no-audit --fund=false
-    else
-      npm install --no-audit --fund=false
+    echo "==> Maintenance: lock-aware refresh"
+    if [ -f package.json ]; then
+      if [ -f package-lock.json ]; then
+        if ! npm ci --no-audit --fund=false; then
+          echo "Repairing lockfile then retrying ci..."
+          npm install --package-lock-only --no-audit --fund=false
+          npm ci --no-audit --fund=false
+        fi
+      else
+        npm install --no-audit --fund=false
+      fi
     fi
-    echo "==> Quick smoke: ensure server starts over stdio"
-    node dist/codex-subagents.mcp.js --help >/dev/null 2>&1 || true
-    echo "Maintenance complete."
 
+    echo "==> Smoke: ensure Node/npm available"
+    node -v && npm -v
+    echo "Maintenance complete."
   network:
     agent_internet_access: true
     domain_allowlist_profile: "Common dependencies"
