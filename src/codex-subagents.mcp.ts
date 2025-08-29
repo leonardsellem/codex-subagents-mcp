@@ -311,6 +311,8 @@ class TinyMCPServer {
   constructor(private name: string, private version: string) {
     process.stdin.on('data', (chunk: Buffer) => this.onData(chunk));
     process.stdin.on('error', (err: unknown) => console.error('stdin error', err));
+    // Ensure the process starts reading immediately
+    process.stdin.resume();
   }
 
   addTool(def: ToolDef) {
@@ -363,7 +365,7 @@ class TinyMCPServer {
   private write(obj: Record<string, unknown>) {
     const payload = Buffer.from(JSON.stringify(obj), 'utf8');
     const header = Buffer.from(
-      `Content-Length: ${payload.length}\r\nContent-Type: application/vscode-jsonrpc; charset=utf-8\r\n\r\n`,
+      `Content-Length: ${payload.length}\r\nContent-Type: application/json; charset=utf-8\r\n\r\n`,
       'utf8',
     );
     process.stdout.write(header);
@@ -394,12 +396,14 @@ class TinyMCPServer {
           serverInfo: { name: this.name, version: this.version },
         };
         this.writeMessage({ jsonrpc: '2.0', id, result });
-        this.writeNotification('initialized');
-        if (process.env.DEBUG_MCP) {
-          console.error(
-            `[${new Date().toISOString()}] initialized sent after ${Date.now() - START_TIME}ms`,
-          );
-        }
+        setTimeout(() => {
+          this.writeNotification('initialized');
+          if (process.env.DEBUG_MCP) {
+            console.error(
+              `[${new Date().toISOString()}] initialized sent after ${Date.now() - START_TIME}ms`,
+            );
+          }
+        }, 0);
         return;
       }
       if (req.method === 'tools/list') {
