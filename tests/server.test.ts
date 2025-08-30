@@ -22,10 +22,10 @@ describe('Workdir creation', () => {
 });
 
 describe('Mirroring', () => {
-  const src = join(tmpdir(), `mcp-src-${Date.now()}`);
-  const dest = join(tmpdir(), `mcp-dest-${Date.now()}`);
-
-  it.skipIf(process.env.CI === 'true')('mirrors directory contents', () => {
+  it('mirrors directory contents under base cwd', () => {
+    const base = process.cwd();
+    const src = join(base, `tmp-mcp-src-${Date.now()}`);
+    const dest = join(base, `tmp-mcp-dest-${Date.now()}`);
     mkdirSync(src, { recursive: true });
     writeFileSync(join(src, 'file.txt'), 'content', 'utf8');
     mkdirSync(dest, { recursive: true });

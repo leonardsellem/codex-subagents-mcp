@@ -28,7 +28,7 @@ sandbox_mode    = "workspace-write"
 ```
 
 Notes:
-- The MCP server runs outside the Codex sandbox. Keep the exposed tools minimal; here there’s only one: `delegate`.
+- The MCP server runs outside the Codex sandbox. Keep the exposed tools minimal; this server exposes `delegate`, plus support tools `list_agents` and `validate_agents`.
 - Profiles control Codex execution for sub-agents. You can set stricter sandboxing (e.g., `read-only` for review) and different models per agent.
 
 ### How it works
@@ -67,6 +67,8 @@ Validated frontmatter/JSON keys:
 - `approval_policy`: one of `never | on-request | on-failure | untrusted`
 - `sandbox_mode`: one of `read-only | workspace-write | danger-full-access`
 These are validated and treated as advisory metadata; align your Codex profiles accordingly.
+
+Defaults for agents directory (when neither arg nor env are provided): `./agents`, `./.codex-subagents/agents`, then `dist/../agents`.
 
 List agents:
 

@@ -11,7 +11,7 @@
 
 import { mkdtempSync, writeFileSync, cpSync, existsSync, readdirSync, readFileSync, statSync, mkdirSync } from 'fs';
 import { tmpdir } from 'os';
-import { join, basename, extname } from 'path';
+import { join, basename, extname, resolve } from 'path';
 import { spawn } from 'child_process';
 import { z } from 'zod';
 import { randomBytes } from 'crypto';
@@ -112,14 +112,31 @@ export type DelegateBatchParams = z.infer<typeof DelegateBatchParamsSchema>;
 // Spawn helper
 export function run(cmd: string, args: string[], cwd?: string): Promise<{ code: number; stdout: string; stderr: string }>
 {
+  function sanitizedEnv(base: NodeJS.ProcessEnv = process.env) {
+    const allow = ['PATH', 'HOME', 'LANG', 'LC_ALL', 'SHELL', 'TERM', 'TMPDIR'];
+    const prefixAllow = ['CODEX_', 'SUBAGENTS_'];
+    const out: Record<string, string> = {};
+    for (const k of allow) if (base[k]) out[k] = String(base[k]);
+    for (const [k, v] of Object.entries(base)) {
+      if (prefixAllow.some((p) => k.startsWith(p)) && typeof v !== 'undefined') out[k] = String(v);
+    }
+    return out;
+  }
   return new Promise((resolve) => {
-    const child = spawn(cmd, args, { cwd, env: process.env });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.on('data', (d) => (stdout += d.toString()));
-    child.stderr.on('data', (d) => (stderr += d.toString()));
-    child.on('close', (code) => resolve({ code: code ?? 0, stdout, stderr }));
-    child.on('error', (err: unknown) => resolve({ code: 127, stdout, stderr: String(err) }));
+    const child = spawn(cmd, args, { cwd, env: sanitizedEnv() });
+    const outChunks: Array<string | Buffer> = [];
+    const errChunks: Array<string | Buffer> = [];
+    child.stdout.on('data', (d) => outChunks.push(d));
+    child.stderr.on('data', (d) => errChunks.push(d));
+    const toUtf8 = (arr: Array<string | Buffer>) =>
+      Buffer.concat(arr.map((x) => (Buffer.isBuffer(x) ? x : Buffer.from(String(x))))).toString('utf8');
+    child.on('close', (code) => resolve({ code: code ?? 0, stdout: toUtf8(outChunks), stderr: toUtf8(errChunks) }));
+    child.on('error', (err: any) => {
+      const msg = err && err.code === 'ENOENT'
+        ? 'codex binary not found in PATH. Install Codex CLI and ensure it is on PATH. See README.md for setup instructions.'
+        : String(err);
+      resolve({ code: 127, stdout: '', stderr: msg });
+    });
   });
 }
 
@@ -142,8 +159,23 @@ export function writePersona(workdir: string, agent: AgentKey): void {
 export function mirrorRepoIfRequested(srcCwd: string | undefined, dest: string, mirror: boolean): void {
   if (!mirror) return;
   if (!srcCwd) return;
-  // Fast path mirroring. This may be large; see SECURITY.md for alternatives.
-  cpSync(srcCwd, dest, { recursive: true, force: true });
+  // Validate and filter sensitive paths by default
+  const base = resolve(process.cwd());
+  const src = resolve(srcCwd);
+  if (!(src === base || src.startsWith(base + '/'))) {
+    throw new Error(`Refusing to mirror outside base cwd: ${src}`);
+  }
+  const skip = new Set(['.git', '.ssh', '.env', '.env.local', 'node_modules']);
+  const mirrorAll = process.env.SUBAGENTS_MIRROR_ALL === '1';
+  cpSync(src, dest, {
+    recursive: true,
+    force: true,
+    filter: (p: string) => {
+      if (mirrorAll) return true;
+      const name = basename(p);
+      return !skip.has(name);
+    },
+  });
 }
 
 // -------- Dynamic agents loading from directory --------
@@ -175,15 +207,14 @@ export function getAgentsDir(
 }
 
 function parseFrontmatter(md: string): { attrs: Record<string, string>; body: string } {
-  if (!md.startsWith('---')) return { attrs: {}, body: md };
-  const end = md.indexOf('\n---');
-  if (end === -1) return { attrs: {}, body: md };
-  const raw = md.slice(3, end).trim();
-  const body = md.slice(end + 4).replace(/^\s*\n/, '');
+  const m = md.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
+  if (!m) return { attrs: {}, body: md };
+  const raw = m[1];
+  const body = md.slice(m[0].length);
   const attrs: Record<string, string> = {};
   for (const line of raw.split(/\r?\n/)) {
-    const m = line.match(/^([A-Za-z0-9_-]+)\s*:\s*(.+)$/);
-    if (m) attrs[m[1]] = m[2];
+    const kv = line.match(/^([A-Za-z0-9_-]+)\s*:\s*(.+)$/);
+    if (kv) attrs[kv[1]] = kv[2];
   }
   return { attrs, body };
 }
@@ -320,20 +351,6 @@ export async function delegateHandler(params: unknown) {
     }
   }
 
-  // Check that codex binary exists or provide actionable error.
-  const codexCheck = await run(process.platform === 'win32' ? 'where' : 'which', ['codex']);
-  if (codexCheck.code !== 0) {
-    return {
-      ok: false,
-      code: 127,
-      stdout: '',
-      stderr:
-        'codex binary not found in PATH. Install Codex CLI and ensure it is on PATH. ' +
-        'See README.md for setup instructions.',
-      working_dir: workdir,
-    };
-  }
-
   const args = ['exec', '--profile', spec.profile, parsed.task];
   const execCwd = parsed.mirror_repo ? workdir : cwd;
   const res = await run('codex', args, execCwd);
@@ -400,6 +417,8 @@ type ToolDef = {
 class TinyMCPServer {
   private tools: Map<string, ToolDef> = new Map();
   private buffer: Buffer = Buffer.alloc(0);
+  private static readonly MAX_BYTES = 1_000_000; // 1MB cap
+  private framing: 'unknown' | 'cl' | 'nl' = 'unknown';
 
   constructor(private name: string, private version: string) {
     process.stdin.on('data', (chunk: Buffer) => this.onData(chunk));
@@ -418,6 +437,11 @@ class TinyMCPServer {
 
   private onData(chunk: Buffer) {
     this.buffer = Buffer.concat([this.buffer, chunk]);
+    if (this.buffer.length > TinyMCPServer.MAX_BYTES * 2) {
+      // prevent unbounded growth (DoS guard)
+      this.buffer = Buffer.alloc(0);
+      return;
+    }
     // eslint-disable-next-line no-constant-condition
     while (true) {
       const crlfIdx = this.buffer.indexOf('\r\n\r\n');
@@ -432,7 +456,12 @@ class TinyMCPServer {
           this.buffer = this.buffer.slice(headerEnd + sepLen);
           continue;
         }
+        this.framing = 'cl';
         const len = parseInt(match[1], 10);
+        if (!Number.isFinite(len) || len < 0 || len > TinyMCPServer.MAX_BYTES) {
+          this.buffer = this.buffer.slice(headerEnd + sepLen);
+          continue;
+        }
         const total = headerEnd + sepLen + len;
         if (this.buffer.length < total) break;
         const body = this.buffer.slice(headerEnd + sepLen, total).toString('utf8');
@@ -452,6 +481,7 @@ class TinyMCPServer {
       this.buffer = this.buffer.slice(nlIdx + 1);
       if (!line) continue;
       try {
+        this.framing = 'nl';
         const req = JSON.parse(line) as JsonRpcRequest;
         this.handleRequest(req);
       } catch {
@@ -462,7 +492,12 @@ class TinyMCPServer {
 
   private write(obj: Record<string, unknown>) {
     const payload = JSON.stringify(obj);
-    process.stdout.write(payload + '\n');
+    if (this.framing === 'cl') {
+      const header = `Content-Length: ${Buffer.byteLength(payload, 'utf8')}\r\n\r\n`;
+      process.stdout.write(header + payload);
+    } else {
+      process.stdout.write(payload + '\n');
+    }
   }
 
   private writeMessage(obj: JsonRpcResponse) {
@@ -529,7 +564,7 @@ class TinyMCPServer {
             id,
             result: {
               content: [
-                { type: 'text', text: JSON.stringify(data, null, 2) },
+                { type: 'text', text: (process.env.DEBUG_MCP ? JSON.stringify(data, null, 2) : JSON.stringify(data)) },
               ],
             },
           });

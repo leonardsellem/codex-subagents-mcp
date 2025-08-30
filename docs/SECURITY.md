@@ -1,6 +1,6 @@
 # Security
 
-This MCP server runs outside the Codex sandbox and inherits your user permissions. Treat it as high‑trust and keep the surface narrow (one tool: `delegate`) and auditable.
+This MCP server runs outside the Codex sandbox and inherits your user permissions. Treat it as high‑trust and keep the surface narrow (tools: `delegate`, `list_agents`, `validate_agents`) and auditable.
 
 See also: `docs/INTEGRATION.md` (configuration) and `docs/OPERATIONS.md` (operations, logs, env).
 

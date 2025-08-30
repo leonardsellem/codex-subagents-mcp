@@ -20,6 +20,7 @@ Set these to tune behavior and wiring:
 - `CODEX_SUBAGENTS_DIR`: Absolute path to your agents registry directory (overrides auto‑discovery).
 - `DEBUG_MCP=1`: Enables lightweight MCP handshake timing to stderr (never stdout). Useful to diagnose initialize/initialized timing and tool calls without breaking the JSON‑RPC stream.
 - `OPENAI_API_KEY`: Required by Codex CLI to run real model calls during E2E.
+ - `SUBAGENTS_MIRROR_ALL=1`: Allow repo mirroring to include normally skipped paths (e.g., `.git`, `.env`, `node_modules`).
 
 ## Logs
 
@@ -40,7 +41,7 @@ Set these to tune behavior and wiring:
 - `Unknown tool: delegate` or empty tool list:
   - Confirm the server is the built JS from `dist/` and that Codex is connected (`/mcp`).
 - `No agents directory configured` error:
-  - Provide `--agents-dir`, set `CODEX_SUBAGENTS_DIR`, or create an `./agents` directory next to the built server.
+  - Provide `--agents-dir`, set `CODEX_SUBAGENTS_DIR`, or use one of the defaults: `./agents`, `./.codex-subagents/agents`, or `dist/../agents`.
 - No logs visible:
   - Run the server manually (`npm start`) to observe stderr output; keep stdout clean.
 

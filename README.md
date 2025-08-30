@@ -18,6 +18,12 @@ npm run build
 npm start
 ```
 
+Tools exposed by this server:
+- Primary: `delegate`
+- Support: `list_agents`, `validate_agents`
+
+Agents directory discovery (in order): `--agents-dir` arg, `CODEX_SUBAGENTS_DIR` env, then defaults `./agents`, `./.codex-subagents/agents`, `dist/../agents`.
+
 ## Wiring with Codex CLI
 
  Build the server and point Codex at the **absolute** path to the compiled entrypoint. Pass the agents directory explicitly so the server doesn't scan until after the handshake. The server also falls back to an `agents/` folder adjacent to the installed binary (e.g. `dist/../agents`) if `--agents-dir` and `CODEX_SUBAGENTS_DIR` are not provided:
