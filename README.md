@@ -53,28 +53,13 @@ Usage (in Codex):
 ## AGENTS hint to drop into your repo’s `AGENTS.md`
 
 ```
-When a task matches a sub-agent specialty, call the MCP tool:
+Route all work through the orchestrator:
 
-- Orchestrate multi-step → `subagents.delegate(agent="orchestrator", task="<task>")`
-- iOS → `subagents.delegate(agent="ios", task="<task>")`
-- Web → `subagents.delegate(agent="web", task="<task>")`
-- UX → `subagents.delegate(agent="ux", task="<task>")`
-- Test → `subagents.delegate(agent="test", task="<task>")`
-- DevOps → `subagents.delegate(agent="devops", task="<task>")`
-- Code review → `subagents.delegate(agent="review", task="<task>")`
-- Security → `subagents.delegate(agent="security", task="<task>")`
-- Performance → `subagents.delegate(agent="perf", task="<task>")`
-- API → `subagents.delegate(agent="api", task="<task>")`
-- Docs → `subagents.delegate(agent="docs", task="<task>")`
-- Git/PRs → `subagents.delegate(agent="git", task="<task>")`
-- Research → `subagents.delegate(agent="research", task="<task>")`
-- Customer discovery → `subagents.delegate(agent="custdev", task="<task>")`
-- Pricing/monetization → `subagents.delegate(agent="pricing", task="<task>")`
-- Copywriting → `subagents.delegate(agent="copy", task="<task>")`
-- Analytics/experiments → `subagents.delegate(agent="analytics", task="<task>")`
-- Accessibility → `subagents.delegate(agent="a11y", task="<task>")`
-- Obsidian vault → `subagents.delegate(agent="obsidian", task="<task>")`
-- Focus coaching → `subagents.delegate(agent="coach", task="<task>")`
+subagents.delegate(agent="orchestrator", task="<goal>")
+
+Example security review routed via orchestrator:
+
+subagents.delegate(agent="orchestrator", task="Audit the repo for secrets and unsafe shell calls")
 
 Prefer tool calls over in-thread analysis to keep the main context clean.
 ```

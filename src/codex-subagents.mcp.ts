@@ -9,15 +9,18 @@
  you can swap it with minimal code changes.
 */
 
-import { mkdtempSync, writeFileSync, cpSync, existsSync, readdirSync, readFileSync, statSync } from 'fs';
+import { mkdtempSync, writeFileSync, cpSync, existsSync, readdirSync, readFileSync, statSync, mkdirSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, basename, extname } from 'path';
 import { spawn } from 'child_process';
 import { z } from 'zod';
+import { randomBytes } from 'crypto';
+import { routeThroughOrchestrator, loadTodo, saveTodo, appendStep, updateStep } from './orchestration';
 
 const SERVER_NAME = 'codex-subagents';
 const SERVER_VERSION = '0.1.0';
 const START_TIME = Date.now();
+export const ORCHESTRATOR_TOKEN = randomBytes(16).toString('hex');
 
 // Personas and profiles
 type AgentKey = 'reviewer' | 'debugger' | 'security';
@@ -94,9 +97,17 @@ export const DelegateParamsSchema = z.object({
   persona: z.string().optional(),
   approval_policy: z.enum(['never', 'on-request', 'on-failure', 'untrusted']).optional(),
   sandbox_mode: z.enum(['read-only', 'workspace-write', 'danger-full-access']).optional(),
+  token: z.string().optional(),
+  request_id: z.string().optional(),
 });
 
 export type DelegateParams = z.infer<typeof DelegateParamsSchema>;
+
+export const DelegateBatchParamsSchema = z.object({
+  items: z.array(DelegateParamsSchema),
+  token: z.string().optional(),
+});
+export type DelegateBatchParams = z.infer<typeof DelegateBatchParamsSchema>;
 
 // Spawn helper
 export function run(cmd: string, args: string[], cwd?: string): Promise<{ code: number; stdout: string; stderr: string }>
@@ -229,6 +240,32 @@ export function loadAgentsFromDir(dir?: string): Record<string, AgentSpec> {
 
 export async function delegateHandler(params: unknown) {
   const parsed = DelegateParamsSchema.parse(params);
+  // Token gating & routing
+  if (parsed.agent !== 'orchestrator') {
+    if (parsed.token !== ORCHESTRATOR_TOKEN) {
+      if (parsed.request_id) {
+        return {
+          ok: false,
+          code: 1,
+          stdout: '',
+          stderr: 'Only orchestrator can delegate. Pass server-injected token.',
+          working_dir: '',
+        };
+      }
+      const routed = routeThroughOrchestrator(parsed);
+      return delegateHandler({ ...parsed, ...routed });
+    }
+  } else {
+    if (!parsed.request_id) {
+      const routed = routeThroughOrchestrator(parsed);
+      parsed.request_id = routed.request_id;
+      parsed.task = routed.task;
+    } else {
+      const cwdEnsure = parsed.cwd ?? process.cwd();
+      mkdirSync(join(cwdEnsure, 'orchestration', parsed.request_id), { recursive: true });
+    }
+  }
+
   const agentName = parsed.agent;
   const dynamic = loadAgentsFromDir(getAgentsDir());
   const registry: Record<string, AgentSpec> = { ...AGENTS, ...dynamic };
@@ -251,6 +288,18 @@ export async function delegateHandler(params: unknown) {
     };
   }
   const cwd = parsed.cwd ?? process.cwd();
+  let stepId: string | undefined;
+  if (parsed.agent !== 'orchestrator' && parsed.token === ORCHESTRATOR_TOKEN && parsed.request_id) {
+    const todo = loadTodo(parsed.request_id, cwd);
+    const step = appendStep(todo, {
+      title: parsed.task.split('\n')[0].slice(0, 80),
+      agent: parsed.agent,
+      status: 'running',
+      started_at: new Date().toISOString(),
+    });
+    saveTodo(todo, cwd);
+    stepId = step.id;
+  }
   const workdir = prepareWorkdir((known ? (agentName as AgentKey) : 'reviewer'));
   // Write persona regardless of source
   const personaContent = spec.persona;
@@ -288,6 +337,20 @@ export async function delegateHandler(params: unknown) {
   const args = ['exec', '--profile', spec.profile, parsed.task];
   const execCwd = parsed.mirror_repo ? workdir : cwd;
   const res = await run('codex', args, execCwd);
+  if (stepId && parsed.request_id) {
+    const todo = loadTodo(parsed.request_id, cwd);
+    const stepDir = join(cwd, 'orchestration', parsed.request_id, 'steps', stepId);
+    mkdirSync(stepDir, { recursive: true });
+    writeFileSync(join(stepDir, 'stdout.txt'), res.stdout, 'utf8');
+    writeFileSync(join(stepDir, 'stderr.txt'), res.stderr, 'utf8');
+    updateStep(todo, stepId, {
+      ended_at: new Date().toISOString(),
+      status: res.code === 0 ? 'done' : 'blocked',
+      stdout_path: join('steps', stepId, 'stdout.txt'),
+      stderr_path: join('steps', stepId, 'stderr.txt'),
+    });
+    saveTodo(todo, cwd);
+  }
   return {
     ok: res.code === 0 && res.stdout.trim().length > 0,
     code: res.code,
@@ -295,6 +358,29 @@ export async function delegateHandler(params: unknown) {
     stderr: res.stderr.trim(),
     working_dir: workdir,
   };
+}
+
+export async function delegateBatchHandler(params: unknown) {
+  try {
+    if (params && typeof params === 'object' && 'agent' in (params as any)) {
+      const single = await delegateHandler(params);
+      return { results: [single] };
+    }
+    const parsed = DelegateBatchParamsSchema.parse(params);
+    const results = await Promise.allSettled(
+      parsed.items.map((item) => delegateHandler({ ...item, token: item.token ?? parsed.token }))
+    );
+    return {
+      results: results.map((r) =>
+        r.status === 'fulfilled'
+          ? r.value
+          : { ok: false, code: 1, stdout: '', stderr: String(r.reason), working_dir: '' }
+      ),
+    };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { results: [{ ok: false, code: 1, stdout: '', stderr: msg, working_dir: '' }] };
+  }
 }
 
 // ---------------- Tiny MCP stdio server -----------------
@@ -516,6 +602,13 @@ server.addTool({
     'Run a named sub-agent as a clean Codex exec with its own persona/profile.',
   inputSchema: toJsonSchema(DelegateParamsSchema),
   handler: (args: unknown) => delegateHandler(args),
+});
+
+server.addTool({
+  name: 'delegate_batch',
+  description: 'Run multiple sub-agents in parallel',
+  inputSchema: toJsonSchema(DelegateBatchParamsSchema),
+  handler: (args: unknown) => delegateBatchHandler(args),
 });
 
 server.addTool({
