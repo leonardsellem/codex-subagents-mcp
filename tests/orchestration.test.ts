@@ -43,6 +43,10 @@ describe('batch', () => {
     expect(res.results[0].stderr).toContain('Only orchestrator');
     expect(res.results[1].code).not.toBe(0);
   });
+  it('accepts legacy single-item shape', async () => {
+    const res = await delegateBatchHandler({ agent: 'reviewer', task: 'a' });
+    expect(res.results.length).toBe(1);
+  });
 });
 
 describe('todo lifecycle', () => {

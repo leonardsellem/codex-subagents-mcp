@@ -1,5 +1,5 @@
 ---
-profile: debugger
+profile: default
 approval_policy: on-request
 sandbox_mode: workspace-write
 ---

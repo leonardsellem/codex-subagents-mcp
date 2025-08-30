@@ -361,17 +361,26 @@ export async function delegateHandler(params: unknown) {
 }
 
 export async function delegateBatchHandler(params: unknown) {
-  const parsed = DelegateBatchParamsSchema.parse(params);
-  const results = await Promise.allSettled(
-    parsed.items.map(item => delegateHandler({ ...item, token: item.token ?? parsed.token }))
-  );
-  return {
-    results: results.map(r =>
-      r.status === 'fulfilled'
-        ? r.value
-        : { ok: false, code: 1, stdout: '', stderr: String(r.reason), working_dir: '' }
-    ),
-  };
+  try {
+    if (params && typeof params === 'object' && 'agent' in (params as any)) {
+      const single = await delegateHandler(params);
+      return { results: [single] };
+    }
+    const parsed = DelegateBatchParamsSchema.parse(params);
+    const results = await Promise.allSettled(
+      parsed.items.map((item) => delegateHandler({ ...item, token: item.token ?? parsed.token }))
+    );
+    return {
+      results: results.map((r) =>
+        r.status === 'fulfilled'
+          ? r.value
+          : { ok: false, code: 1, stdout: '', stderr: String(r.reason), working_dir: '' }
+      ),
+    };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { results: [{ ok: false, code: 1, stdout: '', stderr: msg, working_dir: '' }] };
+  }
 }
 
 // ---------------- Tiny MCP stdio server -----------------
