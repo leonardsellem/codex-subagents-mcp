@@ -332,6 +332,7 @@ class TinyMCPServer {
   private tools: Map<string, ToolDef> = new Map();
   private buffer: Buffer = Buffer.alloc(0);
   private static readonly MAX_BYTES = 1_000_000; // 1MB cap
+  private framing: 'unknown' | 'cl' | 'nl' = 'unknown';
 
   constructor(private name: string, private version: string) {
     process.stdin.on('data', (chunk: Buffer) => this.onData(chunk));
@@ -369,6 +370,7 @@ class TinyMCPServer {
           this.buffer = this.buffer.slice(headerEnd + sepLen);
           continue;
         }
+        this.framing = 'cl';
         const len = parseInt(match[1], 10);
         if (!Number.isFinite(len) || len < 0 || len > TinyMCPServer.MAX_BYTES) {
           this.buffer = this.buffer.slice(headerEnd + sepLen);
@@ -393,6 +395,7 @@ class TinyMCPServer {
       this.buffer = this.buffer.slice(nlIdx + 1);
       if (!line) continue;
       try {
+        this.framing = 'nl';
         const req = JSON.parse(line) as JsonRpcRequest;
         this.handleRequest(req);
       } catch {
@@ -403,8 +406,12 @@ class TinyMCPServer {
 
   private write(obj: Record<string, unknown>) {
     const payload = JSON.stringify(obj);
-    const header = `Content-Length: ${Buffer.byteLength(payload, 'utf8')}\r\n\r\n`;
-    process.stdout.write(header + payload);
+    if (this.framing === 'cl') {
+      const header = `Content-Length: ${Buffer.byteLength(payload, 'utf8')}\r\n\r\n`;
+      process.stdout.write(header + payload);
+    } else {
+      process.stdout.write(payload + '\n');
+    }
   }
 
   private writeMessage(obj: JsonRpcResponse) {
