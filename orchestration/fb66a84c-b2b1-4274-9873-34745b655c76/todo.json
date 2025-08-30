@@ -1,0 +1,10 @@
+{
+  "request_id": "fb66a84c-b2b1-4274-9873-34745b655c76",
+  "created_at": "2025-08-30T16:01:09.464Z",
+  "user_prompt": "Docs QA for this repo. Goals: (1) check README, AGENTS.md, docs/* for gaps or drift; (2) ensure quickstart, config, and usage cover agents registry, --agents-dir, env vars, approval/sandbox modes; (3) suggest concise edits or addenda (Markdown snippets) to improve clarity; (4) call out any mismatched file references. Constraints: do not install tools; only read files. Output: list of concrete edits with file/section anchors and short snippets to apply.",
+  "requested_agent": "docs",
+  "status": "active",
+  "steps": [],
+  "next_actions": [],
+  "summary": null
+}

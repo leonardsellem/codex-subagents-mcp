@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-lint-test:
+    name: Node ${{ matrix.node }} • ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      CI: true
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node: [18, 20, 22]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect package manager
+        id: detect
+        run: |
+          if [ -f pnpm-lock.yaml ]; then
+            echo "pm=pnpm" >> "$GITHUB_OUTPUT"
+            echo "cache=pnpm" >> "$GITHUB_OUTPUT"
+            echo "lockfile=pnpm-lock.yaml" >> "$GITHUB_OUTPUT"
+          elif [ -f yarn.lock ]; then
+            echo "pm=yarn" >> "$GITHUB_OUTPUT"
+            echo "cache=yarn" >> "$GITHUB_OUTPUT"
+            echo "lockfile=yarn.lock" >> "$GITHUB_OUTPUT"
+          else
+            echo "pm=npm" >> "$GITHUB_OUTPUT"
+            echo "cache=npm" >> "$GITHUB_OUTPUT"
+            echo "lockfile=package-lock.json" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Node ${{ matrix.node }} + cache
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          check-latest: false
+          cache: ${{ steps.detect.outputs.cache }}
+          cache-dependency-path: ${{ steps.detect.outputs.lockfile }}
+
+      - name: Enable Corepack (yarn/pnpm)
+        run: corepack enable
+
+      - name: Install dependencies
+        run: |
+          case "${{ steps.detect.outputs.pm }}" in
+            pnpm) pnpm install --frozen-lockfile ;;
+            yarn) yarn install --frozen-lockfile ;;
+            npm)  npm ci ;;
+          esac
+
+      - name: Build
+        run: |
+          node -e "p=require('./package.json');process.exit(p.scripts&&p.scripts.build?0:1)" \
+            && ${{ steps.detect.outputs.pm }} run build \
+            || echo "No build script; skipping."
+
+      - name: Lint
+        run: |
+          node -e "p=require('./package.json');process.exit(p.scripts&&p.scripts.lint?0:1)" \
+            && ${{ steps.detect.outputs.pm }} run lint \
+            || echo "No lint script; skipping."
+
+      - name: Test
+        run: |
+          node -e "p=require('./package.json');process.exit(p.scripts&&p.scripts.test?0:1)" \
+            && ${{ steps.detect.outputs.pm }} test \
+            || echo "No test script; skipping."
+

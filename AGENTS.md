@@ -1,6 +1,6 @@
 # Agents
 
-Author custom sub‑agents without code changes by adding files to an agents registry directory. The MCP server loads definitions from `agents/*.md` and `agents/*.json`. Agent names map to file basenames (e.g., `agents/perf.md` registers agent `perf`). There are no built‑in agents; only files on disk (or an ad‑hoc inline agent when both `persona` and `profile` are provided) are recognized.
+Author custom sub‑agents without code changes by adding files to an agents registry directory. The MCP server loads definitions from `agents/*.md` and `agents/*.json`. Agent names map to file basenames (e.g., `agents/perf.md` registers agent `perf`). The server may include a few example built‑ins for demos, but prefer files on disk (or use an ad‑hoc inline agent when both `persona` and `profile` are provided).
 
 - Point the server to your agents directory via `--agents-dir` or `CODEX_SUBAGENTS_DIR`. It also auto-detects `./agents` or `./.codex-subagents/agents` when not provided.
 - Keep personas task‑oriented and concise; avoid generic, unfocused instructions.
@@ -18,7 +18,7 @@ sandbox_mode: workspace-write # read-only | workspace-write | danger-full-access
 You are a pragmatic performance analyst. Identify hotspots, propose minimal, measurable fixes, and outline validation steps with lightweight metrics.
 ```
 
-Required: `profile`. Optional: `approval_policy`, `sandbox_mode`. The body is the persona text injected for the sub‑agent.
+Required: `profile` (loader defaults to `default` if omitted). Optional: `approval_policy`, `sandbox_mode`. The body is the persona text injected for the sub‑agent.
 
 ## JSON agent
 
@@ -41,6 +41,7 @@ Required: `profile`, `persona`. Optional: `approval_policy`, `sandbox_mode`.
 - List available agents: `tools.call name=list_agents`.
 - Align metadata with Codex profiles you run under; enforce behavior in `~/.codex/config.toml`.
 - Keep personas short, specific, and action‑biased; prefer concrete checklists over philosophy.
+ - See also: `docs/OPERATIONS.md`.
 
 ## Usage Hint
 
