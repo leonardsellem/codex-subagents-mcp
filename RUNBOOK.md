@@ -6,7 +6,7 @@
 3. Configure Codex CLI:
    ```toml
    # ~/.codex/config.toml
-   [mcp_servers.codex-subagents]
+   [mcp_servers.subagents]
    command = "node"
    args = ["/absolute/path/to/dist/codex-subagents.mcp.js"]
    ```

@@ -2,7 +2,7 @@
 
 ## P0 — Core (ship a usable MVP)
 - [x] Implement MCP server with `delegate` tool (TS, Node ≥18)
-- [x] Personas + profiles wired (reviewer/debugger/security)
+- [x] Personas + profiles wired (review/debugger/security)
 - [x] Build pipeline and dist artifact
 - [x] README with Codex config + quickstart
 - [x] E2E demo proves end-to-end invocation from Codex (script added; requires user profiles configured)

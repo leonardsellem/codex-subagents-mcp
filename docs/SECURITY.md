@@ -1,41 +1,46 @@
-## Security — codex-subagents-mcp
+# Security
 
-This server exposes a single MCP tool (`delegate`) that shells out to `codex exec` with a tailored profile and persona. Because MCP servers run outside of Codex’s sandbox, treat this as a high-trust component with a narrow, auditable surface.
+This MCP server runs outside the Codex sandbox and inherits your user permissions. Treat it as high‑trust and keep the surface narrow (one tool: `delegate`) and auditable.
 
-### Trust boundaries
+See also: `docs/INTEGRATION.md` (configuration) and `docs/OPERATIONS.md` (operations, logs, env).
 
-- MCP server process: Full host access (inherits user permissions). Keep tool surface minimal. Review code.
-- Codex exec profiles: Control sandboxing and approvals per agent (`~/.codex/config.toml`). Example defaults:
-  - `reviewer`: `read-only`, `on-request`
-  - `debugger`: `workspace-write`, `on-request`
-  - `security`: `workspace-write`, `never`
+## Trust Boundaries
+- MCP process: Full host access under your user; review changes carefully.
+- Codex profiles: Enforce sandboxing and approvals per agent in `~/.codex/config.toml`.
 
-### Risks and mitigations
+## Risks + Mitigations (Least‑Privilege)
+- Shell exec (`codex exec`): Command injection/overbroad execution.
+  - Mitigate: Pass only trusted `task` text; avoid untrusted flags; validate agent metadata.
+- Secrets exposure: Reading tokens/keys from workspace or env.
+  - Mitigate: Prefer `read-only` for review agents; scope tasks; use `git worktree` over full mirroring for isolation.
+- Network egress/data exfiltration: Agents leaking data.
+  - Mitigate: Use restrictive Codex profiles; keep MCP tool surface minimal; avoid adding networked tools here.
+- Path traversal/unsafe `cwd`: Acting on unintended paths.
+  - Mitigate: Whitelist repos/paths; do not accept untrusted `cwd`.
+- Supply chain: Dependency compromise.
+  - Mitigate: Minimal deps; locked versions; periodic updates and review.
+- Log leakage: Sensitive content in stderr/stdout.
+  - Mitigate: Default quiet logs; enable debug locally only; redact when possible.
 
-- Shelling out (`codex exec`): Ensure the `task` string originates from a trusted user. This tool does not pass arbitrary file paths or extra flags from untrusted sources.
-- Secrets exposure: Avoid mirroring secrets into temp dirs unless necessary. Prefer `git worktree` to isolate without duplicating secrets.
-- SSRF / network egress: Respect Codex profile/network settings. This MCP server itself does not make network calls except for spawning local `codex`.
-- Path traversal: `cwd` is used as provided; avoid passing untrusted paths. If in doubt, whitelist to known repos.
-- Supply chain: Minimal dependencies; audit `package-lock.json` when pinning versions. Update periodically.
+## Secure Defaults
+- Narrow tool surface: keep only `delegate` unless clearly justified.
+- Align agent metadata (`approval_policy`, `sandbox_mode`) with Codex profiles (profiles enforce behavior).
+- Favor approvals (`on-request`) for high‑risk work; relax intentionally and sparingly.
+- Prefer `git worktree` for large/sensitive repos; avoid `mirror_repo` unless necessary.
 
-### Recommended defaults
+## Agent Hygiene
+- Store agents in a reviewed directory (`--agents-dir` or `CODEX_SUBAGENTS_DIR`).
+- Validate regularly:
+  - `tools.call name=validate_agents`
+- List loaded agents:
+  - `tools.call name=list_agents`
 
-- Keep `mirror_repo=false` by default. For large repos or sensitive data, use `git worktree` instead of recursive copy.
-- Use stricter sandbox for `reviewer` (read-only) and enable approvals. Relax only as needed for `debugger`.
-- For `security`, maintain workspace-write but keep tasks explicit and scoped.
+## Auditing Pointers
+- Review `src/codex-subagents.mcp.ts` (schema validation, the single spawn site).
+- Search for `spawn(` to confirm the sole `codex` call path.
+- Verify logs do not leak sensitive payloads; spot‑check via `npm run e2e`.
 
-### Custom agents
-
-- Custom agents are resolved from a directory (`--agents-dir` or `CODEX_SUBAGENTS_DIR`).
-- Agent names map to filenames; personas are plain text in files. Prefer reviewing these files the same way you review code.
-- Frontmatter/JSON keys (`approval_policy`, `sandbox_mode`) are validated against allowed sets and treated as advisory metadata. Enforce actual behavior via Codex profiles.
-- Ad-hoc agents via tool params (`persona` + `profile` + optional `approval_policy`/`sandbox_mode`) are supported for rapid experiments; consider promoting stable ones to the file registry.
-
-Validation tool:
-- Use `validate_agents` regularly to detect malformed or risky definitions before use. It surfaces per-file errors and warnings.
-
-### Audit tips
-
-- Review `src/codex-subagents.mcp.ts` for the only tool offered and how parameters are validated (Zod).
-- Grep for `spawn(` to audit shell-outs. There is a single `codex` invocation and a `which/where codex` check.
-- Check logs and return payloads for unintended data exposure.
+## Incident Response (Quick)
+- Remove the server from `~/.codex/config.toml` to disable.
+- Rotate affected credentials/secrets.
+- Quarantine and review the agents directory; re‑run `validate_agents`.

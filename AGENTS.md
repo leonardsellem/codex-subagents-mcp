@@ -1,68 +1,52 @@
-# Repository Guidelines
+# Agents
 
-This repository implements a minimal MCP server that provides Claude‑style sub‑agents for Codex CLI. Keep changes focused, auditable, and safe by preserving a narrow tool surface.
+Author custom sub‑agents without code changes by adding files to an agents registry directory. The MCP server loads definitions from `agents/*.md` and `agents/*.json`. Agent names map to file basenames (e.g., `agents/perf.md` registers agent `perf`). There are no built‑in agents; only files on disk (or an ad‑hoc inline agent when both `persona` and `profile` are provided) are recognized.
 
-## Project Structure & Module Organization
-- `src/` – MCP server (`codex-subagents.mcp.ts`).
-- `dist/` – compiled JS (`codex-subagents.mcp.js`).
-- `tests/` – unit tests (Vitest).
-- `scripts/` – e2e demo (`e2e-demo.ts`).
-- `docs/` – `INTEGRATION.md`, `SECURITY.md`, `OPERATIONS.md`.
-- `agents/` (optional) – custom agent definitions (`*.md`/`*.json`).
-- `README.md`, `ROADMAP.md`, `CHANGELOG.md`.
+- Point the server to your agents directory via `--agents-dir` or `CODEX_SUBAGENTS_DIR`. It also auto-detects `./agents` or `./.codex-subagents/agents` when not provided.
+- Keep personas task‑oriented and concise; avoid generic, unfocused instructions.
 
-## Build, Test, and Development Commands
-- `npm run build` – compile TypeScript → `dist/`.
-- `npm start` – run the stdio MCP server from `dist/`.
-- `npm run dev` – run directly via `tsx` for local iteration.
-- `npm test` – run unit tests (Vitest).
-- `npm run e2e` – build, start server, call sample sub‑agents.
-- `npm run lint` – ESLint checks.
+## Markdown agent (frontmatter + persona)
 
-## Coding Style & Naming Conventions
-- Language: TypeScript 5, Node.js ≥ 18, CommonJS output.
-- Linting: ESLint + `@typescript-eslint` (no unused vars, Node env).
-- Indentation: 2 spaces; keep lines concise.
-- Names: PascalCase for types/interfaces; camelCase for variables/functions; UPPER_SNAKE_CASE for module‑level constants.
-- Files: kebab‑case for multiword filenames; tests in `tests/*.test.ts`.
+Create `agents/<name>.md`:
 
-## Testing Guidelines
-- Framework: Vitest. Place tests in `tests/` with `*.test.ts`.
-- Run: `npm test`. Avoid network in unit tests; mock `spawn` for process calls.
-- E2E: `npm run e2e` (expects `codex` binary + configured profiles).
+```md
+---
+profile: debugger
+approval_policy: on-request   # never | on-request | on-failure | untrusted
+sandbox_mode: workspace-write # read-only | workspace-write | danger-full-access
+---
+You are a pragmatic performance analyst. Identify hotspots, propose minimal, measurable fixes, and outline validation steps with lightweight metrics.
+```
 
-## Commit & Pull Request Guidelines
-- Commits: imperative subject (≤72 chars), focused changes, rationale in body.
-- Update docs (`README`, `docs/*`, `ROADMAP`) when behavior or usage changes.
-- PRs: description, testing notes (unit/e2e), relevant screenshots or sample tool output, linked issues.
-- Do not edit `dist/` manually; it is build output.
+Required: `profile`. Optional: `approval_policy`, `sandbox_mode`. The body is the persona text injected for the sub‑agent.
 
-## Security & Configuration Tips
-- MCP runs outside Codex’s sandbox—treat as high‑trust. Keep the surface minimal.
-- Prefer `git worktree` over `mirror_repo` for large/sensitive repos.
-- Align agent metadata (`approval_policy`, `sandbox_mode`) with Codex profiles.
-- Use tools to audit: `list_agents`, `validate_agents`.
+## JSON agent
 
-## Agent‑Specific Instructions
-- Add custom agents to `agents/`:
-  - Markdown with frontmatter:
-    ```md
-    ---
-    profile: debugger
-    approval_policy: on-request
-    sandbox_mode: workspace-write
-    ---
-    You are a pragmatic performance analyst...
-    ```
-  - JSON: `{ "profile": "debugger", "persona": "..." }`.
-- Validate: `tools.call name=validate_agents`.
-- Invoke: `subagents.delegate(agent="perf", task="<task>")`.
+Create `agents/<name>.json`:
+
+```json
+{
+  "profile": "debugger",
+  "persona": "You plan and validate safe DB migrations with rollbacks.",
+  "approval_policy": "on-request",
+  "sandbox_mode": "workspace-write"
+}
+```
+
+Required: `profile`, `persona`. Optional: `approval_policy`, `sandbox_mode`.
+
+## Tips
+
+- Validate registry: `tools.call name=validate_agents` (optionally pass `{ "dir": "/abs/path" }`).
+- List available agents: `tools.call name=list_agents`.
+- Align metadata with Codex profiles you run under; enforce behavior in `~/.codex/config.toml`.
+- Keep personas short, specific, and action‑biased; prefer concrete checklists over philosophy.
 
 ## Usage Hint
 
 When a task matches a sub‑agent specialty, call the MCP tool:
 
-- Orchestrate multi‑step → `subagents.delegate(agent="orchestrator", task="<task>")`
+- Orchestrate multi-step → `subagents.delegate(agent="orchestrator", task="<task>")`
 - iOS → `subagents.delegate(agent="ios", task="<task>")`
 - Web → `subagents.delegate(agent="web", task="<task>")`
 - UX → `subagents.delegate(agent="ux", task="<task>")`
@@ -85,4 +69,7 @@ When a task matches a sub‑agent specialty, call the MCP tool:
 
 Prefer tool calls over in‑thread analysis to keep the main context clean.
 
- 
+## Related docs
+
+- docs/INTEGRATION.md
+- docs/SECURITY.md

@@ -1,6 +1,6 @@
 # codex-subagents-mcp
 
-Claude-style sub-agents (reviewer, debugger, security) for Codex CLI via a tiny MCP server. Each call spins up a clean context in a temp workdir, injects a persona via `AGENTS.md`, and runs `codex exec --profile <agent>` to preserve isolated state.
+Claude-style sub-agents for Codex CLI via a tiny MCP server. Each call spins up a clean context in a temp workdir, injects a persona via `AGENTS.md`, and runs `codex exec --profile <agent>` to preserve isolated state.
 
 ## Quickstart
 
@@ -28,7 +28,7 @@ npm start
 command = "/absolute/path/to/node"
 args    = ["/absolute/path/to/dist/codex-subagents.mcp.js", "--agents-dir", "/absolute/path/to/agents"]
 
-[profiles.reviewer]
+[profiles.review]
 model = "gpt-5"
 approval_policy = "on-request"
 sandbox_mode    = "read-only"
@@ -46,28 +46,52 @@ sandbox_mode    = "workspace-write"
 
 Usage (in Codex):
 
-- “Review my last commit. Use the reviewer sub-agent.”
+- “Review my last commit. Use the review sub-agent.”
 - “Reproduce and fix the failing tests in api/ using the debugger sub-agent.”
 - “Audit for secrets and unsafe shell calls; propose fixes with rationale using the security sub-agent.”
 
-AGENTS hint to drop into your repo’s `AGENTS.md`:
+## AGENTS hint to drop into your repo’s `AGENTS.md`
 
 ```
 When a task matches a sub-agent specialty, call the MCP tool:
 
-- Code review → subagents.delegate(agent="reviewer", task="<my task>")
-- Debugging   → subagents.delegate(agent="debugger", task="<my task>")
-- Security    → subagents.delegate(agent="security", task="<my task>")
+- Orchestrate multi-step → `subagents.delegate(agent="orchestrator", task="<task>")`
+- iOS → `subagents.delegate(agent="ios", task="<task>")`
+- Web → `subagents.delegate(agent="web", task="<task>")`
+- UX → `subagents.delegate(agent="ux", task="<task>")`
+- Test → `subagents.delegate(agent="test", task="<task>")`
+- DevOps → `subagents.delegate(agent="devops", task="<task>")`
+- Code review → `subagents.delegate(agent="review", task="<task>")`
+- Security → `subagents.delegate(agent="security", task="<task>")`
+- Performance → `subagents.delegate(agent="perf", task="<task>")`
+- API → `subagents.delegate(agent="api", task="<task>")`
+- Docs → `subagents.delegate(agent="docs", task="<task>")`
+- Git/PRs → `subagents.delegate(agent="git", task="<task>")`
+- Research → `subagents.delegate(agent="research", task="<task>")`
+- Customer discovery → `subagents.delegate(agent="custdev", task="<task>")`
+- Pricing/monetization → `subagents.delegate(agent="pricing", task="<task>")`
+- Copywriting → `subagents.delegate(agent="copy", task="<task>")`
+- Analytics/experiments → `subagents.delegate(agent="analytics", task="<task>")`
+- Accessibility → `subagents.delegate(agent="a11y", task="<task>")`
+- Obsidian vault → `subagents.delegate(agent="obsidian", task="<task>")`
+- Focus coaching → `subagents.delegate(agent="coach", task="<task>")`
 
 Prefer tool calls over in-thread analysis to keep the main context clean.
 ```
 
 Note: MCP servers run outside Codex’s sandbox. Keep surfaces narrow and audited. This server exposes a single tool: `delegate`.
 
+## Terminology: Agents vs Profiles
+
+- `agent` (what you pass to `subagents.delegate`): the name of an agent loaded from your registry directory. The name is the file basename, e.g., `agents/review.md` → agent `review`.
+- `profile` (Codex CLI): an execution profile you define in `~/.codex/config.toml` under `[profiles.<name>]`. Agents typically specify which profile to use via frontmatter (`profile: <name>`), but agent names and profile names don’t have to match.
+
+There are no hardcoded built‑in agent names. The server loads agents from disk (`agents/*.md|*.json`) or accepts an ad‑hoc agent when both `persona` and `profile` are provided inline.
+
 ## Tool: `delegate`
 
 - Parameters:
-  - `agent`: string — built-in (`reviewer | debugger | security`) or a custom agent name
+  - `agent`: string — the agent name from your registry (basename of `agents/<name>.md|json`)
   - `task`: string (required)
   - `cwd?`: string (defaults to current working directory)
   - `mirror_repo?`: boolean (default false). If true and `cwd` provided, mirrors the repo into the temp workdir for maximal isolation.
@@ -155,6 +179,8 @@ npm run build
 npm run lint
 npm test
 ```
+
+Note: Do not edit `dist/` manually; it is build output.
 
 ## E2E Demo
 
