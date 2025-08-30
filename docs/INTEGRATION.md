@@ -130,3 +130,9 @@ This avoids copying and gives isolation without rewriting in-place state. You ca
 - Reviewer: “Review the last commit for readability and add an actionable patch.”
 - Debugger: “Reproduce and fix the failing unit test in foo.spec.ts.”
 - Security: “Scan for secrets and unsafe shell exec usage; propose fixes.”
+### Terminology
+
+- Agent: Name resolved from your registry files (`agents/<name>.md|json`). Example: `agents/review.md` registers agent `review`.
+- Profile: Codex CLI execution profile (`~/.codex/config.toml` under `[profiles.<name>]`). Agents can declare a `profile` in frontmatter to select which profile Codex should use when delegating.
+
+Agents are loaded from disk (or constructed ad‑hoc by passing both `persona` and `profile` inline). There are no hardcoded built‑in agent names.

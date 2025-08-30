@@ -81,10 +81,17 @@ Prefer tool calls over in-thread analysis to keep the main context clean.
 
 Note: MCP servers run outside Codex’s sandbox. Keep surfaces narrow and audited. This server exposes a single tool: `delegate`.
 
+## Terminology: Agents vs Profiles
+
+- `agent` (what you pass to `subagents.delegate`): the name of an agent loaded from your registry directory. The name is the file basename, e.g., `agents/review.md` → agent `review`.
+- `profile` (Codex CLI): an execution profile you define in `~/.codex/config.toml` under `[profiles.<name>]`. Agents typically specify which profile to use via frontmatter (`profile: <name>`), but agent names and profile names don’t have to match.
+
+There are no hardcoded built‑in agent names. The server loads agents from disk (`agents/*.md|*.json`) or accepts an ad‑hoc agent when both `persona` and `profile` are provided inline.
+
 ## Tool: `delegate`
 
 - Parameters:
-  - `agent`: string — e.g., `review | debugger | security` or a custom agent name
+  - `agent`: string — the agent name from your registry (basename of `agents/<name>.md|json`)
   - `task`: string (required)
   - `cwd?`: string (defaults to current working directory)
   - `mirror_repo?`: boolean (default false). If true and `cwd` provided, mirrors the repo into the temp workdir for maximal isolation.

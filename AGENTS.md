@@ -1,6 +1,6 @@
 # Agents
 
-Author custom sub‑agents without code changes by adding files to an agents registry directory. The MCP server loads definitions from `agents/*.md` and `agents/*.json`. Agent names map to file basenames (e.g., `agents/perf.md` registers agent `perf`).
+Author custom sub‑agents without code changes by adding files to an agents registry directory. The MCP server loads definitions from `agents/*.md` and `agents/*.json`. Agent names map to file basenames (e.g., `agents/perf.md` registers agent `perf`). There are no built‑in agents; only files on disk (or an ad‑hoc inline agent when both `persona` and `profile` are provided) are recognized.
 
 - Point the server to your agents directory via `--agents-dir` or `CODEX_SUBAGENTS_DIR`. It also auto-detects `./agents` or `./.codex-subagents/agents` when not provided.
 - Keep personas task‑oriented and concise; avoid generic, unfocused instructions.
