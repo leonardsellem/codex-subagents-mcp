@@ -7,3 +7,5 @@ coverage/
 .vscode/
 MARKETING.md
 RELEASE_CHECKLIST.md
+
+orchestration/
