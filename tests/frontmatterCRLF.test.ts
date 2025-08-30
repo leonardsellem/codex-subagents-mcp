@@ -20,8 +20,8 @@ describe('frontmatter parsing handles CRLF and line-anchored fences', () => {
     expect(reg.perf.profile).toBe('debugger');
     expect(reg.perf.approval_policy).toBe('on-request');
     expect(reg.perf.sandbox_mode).toBe('workspace-write');
-    expect(reg.perf.persona).toBe('Persona body here.\r\n');
+    // body is trimmed by loader
+    expect(reg.perf.persona).toBe('Persona body here.');
     rmSync(dir, { recursive: true, force: true });
   });
 });
-
