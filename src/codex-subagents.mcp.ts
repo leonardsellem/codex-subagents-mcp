@@ -286,89 +286,85 @@ export function loadAgentsFromDir(dir?: string): Record<string, AgentSpec> {
   return out;
 }
 
+type ToolRunResult = { ok: boolean; code: number; stdout: string; stderr: string; working_dir: string };
+function failure(stderr: string, code = 1, working_dir = ''): ToolRunResult {
+  return { ok: false, code, stdout: '', stderr, working_dir };
+}
+
 export async function delegateHandler(params: unknown) {
-  const parsed = DelegateParamsSchema.parse(params);
+  const parsed = DelegateParamsSchema.safeParse(params);
+  if (!parsed.success) {
+    const summary = parsed.error.issues.map((i) => i.message).join('; ');
+    return failure(`Invalid delegate arguments: ${summary}`, 2);
+  }
+  const p = parsed.data;
   // Pre-check unknown agents to satisfy error-surface tests without routing
   const preDynamic = loadAgentsFromDir(getAgentsDir());
   const preRegistry: Record<string, AgentSpec> = { ...AGENTS, ...preDynamic };
-  const preKnown = preRegistry[parsed.agent as AgentKey] ?? preRegistry[parsed.agent];
-  const hasInline = Boolean(parsed.persona && parsed.profile);
-  if (parsed.agent !== 'orchestrator' && parsed.token !== ORCHESTRATOR_TOKEN && !parsed.request_id) {
+  const preKnown = preRegistry[p.agent as AgentKey] ?? preRegistry[p.agent];
+  const hasInline = Boolean(p.persona && p.profile);
+  if (p.agent !== 'orchestrator' && p.token !== ORCHESTRATOR_TOKEN && !p.request_id) {
     if (!preKnown && !hasInline) {
-      return {
-        ok: false,
-        code: 2,
-        stdout: '',
-        stderr:
-          `Unknown agent: ${parsed.agent}. Create agents/<name>.md or pass persona+profile inline. ` +
+      return failure(
+        `Unknown agent: ${p.agent}. Create agents/<name>.md or pass persona+profile inline. ` +
           'See README.md “Custom agents”.',
-        working_dir: '',
-      };
+        2,
+      );
     }
   }
   // Token gating & routing
-  if (parsed.agent !== 'orchestrator') {
-    if (parsed.token !== ORCHESTRATOR_TOKEN) {
-      if (parsed.request_id) {
-        return {
-          ok: false,
-          code: 1,
-          stdout: '',
-          stderr: 'Only orchestrator can delegate. Pass server-injected token.',
-          working_dir: '',
-        };
+  if (p.agent !== 'orchestrator') {
+    if (p.token !== ORCHESTRATOR_TOKEN) {
+      if (p.request_id) {
+        return failure('Only orchestrator can delegate. Pass server-injected token.');
       }
-      const routed = routeThroughOrchestrator(parsed);
-      return delegateHandler({ ...parsed, ...routed });
+      const routed = routeThroughOrchestrator(p);
+      return delegateHandler({ ...p, ...routed });
     }
   } else {
-    if (!parsed.request_id) {
-      const routed = routeThroughOrchestrator(parsed);
-      parsed.request_id = routed.request_id;
-      parsed.task = routed.task;
+    if (!p.request_id) {
+      const routed = routeThroughOrchestrator(p);
+      p.request_id = routed.request_id;
+      p.task = routed.task;
       // Propagate the writable cwd chosen by the router (may fallback to tmp)
-      if (routed.cwd) parsed.cwd = routed.cwd as string;
+      if (routed.cwd) p.cwd = routed.cwd as string;
     } else {
-      let cwdEnsure = parsed.cwd ?? process.cwd();
+      let cwdEnsure = p.cwd ?? process.cwd();
       try {
-        mkdirSync(join(cwdEnsure, 'orchestration', parsed.request_id), { recursive: true });
+        mkdirSync(join(cwdEnsure, 'orchestration', p.request_id), { recursive: true });
       } catch {
         // Fallback to tmp if current cwd is not writable
         cwdEnsure = join(tmpdir(), 'codex-subagents');
-        mkdirSync(join(cwdEnsure, 'orchestration', parsed.request_id), { recursive: true });
-        parsed.cwd = cwdEnsure;
+        mkdirSync(join(cwdEnsure, 'orchestration', p.request_id), { recursive: true });
+        p.cwd = cwdEnsure;
       }
     }
   }
 
-  const agentName = parsed.agent;
+  const agentName = p.agent;
   const dynamic = loadAgentsFromDir(getAgentsDir());
   const registry: Record<string, AgentSpec> = { ...AGENTS, ...dynamic };
   const known = registry[agentName as AgentKey] ?? registry[agentName];
-  const spec: AgentSpec | undefined = known ?? (parsed.persona && parsed.profile ? {
-    persona: parsed.persona,
-    profile: parsed.profile,
-    approval_policy: parsed.approval_policy,
-    sandbox_mode: parsed.sandbox_mode,
+  const spec: AgentSpec | undefined = known ?? (p.persona && p.profile ? {
+    persona: p.persona,
+    profile: p.profile,
+    approval_policy: p.approval_policy,
+    sandbox_mode: p.sandbox_mode,
   } : undefined);
   if (!spec) {
-    return {
-      ok: false,
-      code: 2,
-      stdout: '',
-      stderr:
-        `Unknown agent: ${agentName}. Create agents/<name>.md or pass persona+profile inline. ` +
+    return failure(
+      `Unknown agent: ${agentName}. Create agents/<name>.md or pass persona+profile inline. ` +
         'See README.md “Custom agents”.',
-      working_dir: '',
-    };
+      2,
+    );
   }
-  const cwd = parsed.cwd ?? process.cwd();
+  const cwd = p.cwd ?? process.cwd();
   let stepId: string | undefined;
-  if (parsed.agent !== 'orchestrator' && parsed.token === ORCHESTRATOR_TOKEN && parsed.request_id) {
-    const todo = loadTodo(parsed.request_id, cwd);
+  if (p.agent !== 'orchestrator' && p.token === ORCHESTRATOR_TOKEN && p.request_id) {
+    const todo = loadTodo(p.request_id, cwd);
     const step = appendStep(todo, {
-      title: parsed.task.split('\n')[0].slice(0, 80),
-      agent: parsed.agent,
+      title: p.task.split('\n')[0].slice(0, 80),
+      agent: p.agent,
       status: 'running',
       started_at: new Date().toISOString(),
     });
@@ -379,29 +375,26 @@ export async function delegateHandler(params: unknown) {
   // Write persona regardless of source
   const personaContent = spec.persona;
   writeFileSync(join(workdir, 'AGENTS.md'), `# Persona: ${agentName}\n\n${personaContent}\n`, 'utf8');
-  if (parsed.mirror_repo) {
+  if (p.mirror_repo) {
     try {
       mirrorRepoIfRequested(cwd, workdir, true);
     } catch (e) {
-      return {
-        ok: false,
-        code: 1,
-        stdout: '',
-        stderr:
-          `Failed to mirror repo into temp dir: ${String(e)}. ` +
+      return failure(
+        `Failed to mirror repo into temp dir: ${String(e)}. ` +
           'Consider disabling mirroring or using git worktree (see docs).',
-        working_dir: workdir,
-      };
+        1,
+        workdir,
+      );
     }
   }
 
-  const args = ['exec', '--profile', spec.profile, parsed.task];
-  const execCwd = parsed.mirror_repo ? workdir : cwd;
-  const isOrchestrator = parsed.agent === 'orchestrator';
+  const args = ['exec', '--profile', spec.profile, p.task];
+  const execCwd = p.mirror_repo ? workdir : cwd;
+  const isOrchestrator = p.agent === 'orchestrator';
   let res: { code: number; stdout: string; stderr: string };
-  if (isOrchestrator && parsed.request_id) {
+  if (isOrchestrator && p.request_id) {
     const prev = CURRENT_ORCHESTRATION_REQUEST_ID;
-    CURRENT_ORCHESTRATION_REQUEST_ID = parsed.request_id;
+    CURRENT_ORCHESTRATION_REQUEST_ID = p.request_id;
     try {
       res = await run('codex', args, execCwd);
     } finally {
@@ -411,9 +404,9 @@ export async function delegateHandler(params: unknown) {
     res = await run('codex', args, execCwd);
   }
   // If orchestrator ran, automatically populate summary and next_actions from its output
-  if (isOrchestrator && parsed.request_id) {
+  if (isOrchestrator && p.request_id) {
     try {
-      const todo = loadTodo(parsed.request_id, cwd);
+      const todo = loadTodo(p.request_id, cwd);
       const out = (res.stdout || '').trim();
       // Summary: first 500 chars of stdout or stderr fallback
       const base = out.length > 0 ? out : (res.stderr || '').trim();
@@ -435,9 +428,9 @@ export async function delegateHandler(params: unknown) {
       // best-effort; ignore failures here
     }
   }
-  if (stepId && parsed.request_id) {
-    const todo = loadTodo(parsed.request_id, cwd);
-    const stepDir = join(cwd, 'orchestration', parsed.request_id, 'steps', stepId);
+  if (stepId && p.request_id) {
+    const todo = loadTodo(p.request_id, cwd);
+    const stepDir = join(cwd, 'orchestration', p.request_id, 'steps', stepId);
     mkdirSync(stepDir, { recursive: true });
     writeFileSync(join(stepDir, 'stdout.txt'), res.stdout, 'utf8');
     writeFileSync(join(stepDir, 'stderr.txt'), res.stderr, 'utf8');
@@ -467,9 +460,13 @@ export async function delegateBatchHandler(params: unknown) {
       const single = await delegateHandler(params);
       return { results: [single] };
     }
-    const parsed = DelegateBatchParamsSchema.parse(params);
+    const parsed = DelegateBatchParamsSchema.safeParse(params);
+    if (!parsed.success) {
+      const summary = parsed.error.issues.map((i) => i.message).join('; ');
+      return { results: [failure(`Invalid delegate arguments: ${summary}`, 2)] };
+    }
     const results = await Promise.allSettled(
-      parsed.items.map((item) => delegateHandler({ ...item, token: item.token ?? parsed.token }))
+      parsed.data.items.map((item) => delegateHandler({ ...item, token: item.token ?? parsed.data.token }))
     );
     return {
       results: results.map((r) =>
@@ -686,10 +683,16 @@ class TinyMCPServer {
           });
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
+          if (process.env.DEBUG_MCP) {
+            this.writeNotification('tool/error', { name, message: msg });
+          }
+          const failObj = failure(msg);
           this.writeMessage({
             jsonrpc: '2.0',
             id,
-            error: { code: -32000, message: msg },
+            result: {
+              content: [{ type: 'text', text: JSON.stringify(failObj) }],
+            },
           });
         }
         return;

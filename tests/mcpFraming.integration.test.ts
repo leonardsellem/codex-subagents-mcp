@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { spawn } from 'child_process';
 import { join } from 'path';
 
-function frame(msg: any) {
+function frame(msg: Record<string, unknown>) {
   const json = JSON.stringify(msg);
   const body = Buffer.from(json, 'utf8');
   const header = `Content-Length: ${body.length}\r\n\r\n`;
@@ -58,8 +58,8 @@ describe('MCP framing (initialize, tools/list)', () => {
     expect(init.result.serverInfo.name).toBeDefined();
     proc.stdin.write(frame({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }));
     const listBody = await readFramed(proc);
-    const list = JSON.parse(listBody);
-    const toolNames = list.result.tools.map((t: any) => t.name);
+      const list = JSON.parse(listBody);
+      const toolNames = list.result.tools.map((t: { name: string }) => t.name);
     expect(toolNames).toEqual(expect.arrayContaining(['delegate', 'list_agents', 'validate_agents']));
     try { proc.stdin.end(); proc.kill(); } catch { /* ignore in sandbox */ }
   });

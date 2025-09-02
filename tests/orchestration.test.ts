@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { routeThroughOrchestrator, loadTodo, finalize, saveTodo } from '../src/orchestration';
-import { delegateHandler, ORCHESTRATOR_TOKEN, delegateBatchHandler } from '../src/codex-subagents.mcp';
+import { delegateHandler, ORCHESTRATOR_TOKEN, delegateBatchHandler, DelegateParams } from '../src/codex-subagents.mcp';
 import { mkdtempSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -12,7 +12,7 @@ function makeCwd() {
 describe('routing', () => {
   it('rewrites to orchestrator and creates todo', () => {
     const cwd = makeCwd();
-    const routed = routeThroughOrchestrator({ agent: 'security', task: 'scan', cwd } as any);
+      const routed = routeThroughOrchestrator({ agent: 'security', task: 'scan', cwd } as DelegateParams);
     expect(routed.agent).toBe('orchestrator');
     const todo = loadTodo(routed.request_id, cwd);
     expect(todo.requested_agent).toBe('security');
@@ -52,7 +52,7 @@ describe('batch', () => {
 describe('todo lifecycle', () => {
   it('records steps with outputs', async () => {
     const cwd = makeCwd();
-    const routed = routeThroughOrchestrator({ agent: 'reviewer', task: 'check', cwd } as any);
+      const routed = routeThroughOrchestrator({ agent: 'reviewer', task: 'check', cwd } as DelegateParams);
     await delegateHandler({ agent: 'debugger', task: 'run', token: ORCHESTRATOR_TOKEN, request_id: routed.request_id, cwd });
     const todo = loadTodo(routed.request_id, cwd);
     expect(todo.steps.length).toBe(1);
@@ -63,7 +63,7 @@ describe('todo lifecycle', () => {
 describe('e2e multi-step', () => {
   it('tracks multiple steps', async () => {
     const cwd = makeCwd();
-    const routed = routeThroughOrchestrator({ agent: 'orchestrator', task: 'plan', cwd } as any);
+      const routed = routeThroughOrchestrator({ agent: 'orchestrator', task: 'plan', cwd } as DelegateParams);
     const req = routed.request_id;
     await delegateHandler({ agent: 'reviewer', task: 'r', token: ORCHESTRATOR_TOKEN, request_id: req, cwd });
     await delegateHandler({ agent: 'debugger', task: 'd', token: ORCHESTRATOR_TOKEN, request_id: req, cwd });
