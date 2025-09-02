@@ -15,7 +15,7 @@ import { join, basename, extname, resolve } from 'path';
 import { spawn } from 'child_process';
 import { z } from 'zod';
 import { randomBytes } from 'crypto';
-import { routeThroughOrchestrator, loadTodo, saveTodo, appendStep, updateStep } from './orchestration';
+import { routeThroughOrchestrator, loadTodo, saveTodo, appendStep, updateStep, applyOrchestratorMarkersToTodo } from './orchestration';
 
 const SERVER_NAME = 'codex-subagents';
 const SERVER_VERSION = '0.1.0';
@@ -366,6 +366,7 @@ export async function delegateHandler(params: unknown) {
       title: p.task.split('\n')[0].slice(0, 80),
       agent: p.agent,
       status: 'running',
+      prompt: p.task,
       started_at: new Date().toISOString(),
     });
     saveTodo(todo, cwd);
@@ -424,6 +425,8 @@ export async function delegateHandler(params: unknown) {
       }
       todo.next_actions = bullets;
       saveTodo(todo, cwd);
+      // Parse orchestrator THINK/DECISION markers and add to todo steps
+      applyOrchestratorMarkersToTodo(p.request_id, cwd, out);
     } catch {
       // best-effort; ignore failures here
     }
@@ -432,11 +435,14 @@ export async function delegateHandler(params: unknown) {
     const todo = loadTodo(p.request_id, cwd);
     const stepDir = join(cwd, 'orchestration', p.request_id, 'steps', stepId);
     mkdirSync(stepDir, { recursive: true });
+    // Persist exact prompt and outputs for auditability
+    writeFileSync(join(stepDir, 'prompt.txt'), (p.task || '').toString(), 'utf8');
     writeFileSync(join(stepDir, 'stdout.txt'), res.stdout, 'utf8');
     writeFileSync(join(stepDir, 'stderr.txt'), res.stderr, 'utf8');
     updateStep(todo, stepId, {
       ended_at: new Date().toISOString(),
       status: res.code === 0 ? 'done' : 'blocked',
+      prompt_path: join('steps', stepId, 'prompt.txt'),
       stdout_path: join('steps', stepId, 'stdout.txt'),
       stderr_path: join('steps', stepId, 'stderr.txt'),
     });

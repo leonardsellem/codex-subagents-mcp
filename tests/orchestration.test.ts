@@ -57,6 +57,10 @@ describe('todo lifecycle', () => {
     const todo = loadTodo(routed.request_id, cwd);
     expect(todo.steps.length).toBe(1);
     expect(todo.steps[0].status).toBe('blocked');
+    // prompt captured and persisted
+    expect(todo.steps[0].prompt).toBe('run');
+    const promptPath = todo.steps[0].prompt_path!;
+    expect(promptPath).toMatch(/steps\/step-1\/prompt\.txt$/);
   });
 });
 

@@ -36,6 +36,24 @@ Summary & next actions:
 Status progression:
 - `todo.status` transitions to `done` automatically when no steps are still `running`.
 
+### What gets logged per step
+
+- Exact delegated prompt: stored in-memory on the step and persisted at `steps/<step-id>/prompt.txt`.
+- Outputs: `steps/<step-id>/stdout.txt` and `stderr.txt`.
+- Metadata: agent name, status, start/end timestamps.
+
+### Orchestrator thinking markers
+
+The orchestrator can annotate its reasoning timeline by printing one-line markers to stdout:
+
+```
+[[ORCH-THINK]] {"text":"map critical paths; need security + tests"}
+[[ORCH-DECISION]] {"text":"delegate security scan and test plan in parallel"}
+[[ORCH-NOTE]] waiting for batch results…
+```
+
+The server parses these after the run and appends them to the To‑Do as additional steps authored by `orchestrator` with `notes` set to the marker text.
+
 ## Example
 
 ```
