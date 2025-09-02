@@ -7,6 +7,7 @@ See also: `docs/INTEGRATION.md` (configuration) and `docs/OPERATIONS.md` (operat
 ## Trust Boundaries
 - MCP process: Full host access under your user; review changes carefully.
 - Codex profiles: Enforce sandboxing and approvals per agent in `~/.codex/config.toml`.
+ - Orchestrator token: Only the orchestrator may delegate. The server injects an internal token for nested delegates.
 
 ## Risks + Mitigations (Least‑Privilege)
 - Shell exec (`codex exec`): Command injection/overbroad execution.
@@ -17,6 +18,8 @@ See also: `docs/INTEGRATION.md` (configuration) and `docs/OPERATIONS.md` (operat
   - Mitigate: Use restrictive Codex profiles; keep MCP tool surface minimal; avoid adding networked tools here.
 - Path traversal/unsafe `cwd`: Acting on unintended paths.
   - Mitigate: Whitelist repos/paths; do not accept untrusted `cwd`.
+- Unknown agent routing: Accidentally routing to an unintended persona.
+  - Mitigate: The server pre‑checks unknown agents and rejects early unless both `persona` and `profile` are provided inline.
 - Supply chain: Dependency compromise.
   - Mitigate: Minimal deps; locked versions; periodic updates and review.
 - Log leakage: Sensitive content in stderr/stdout.
@@ -27,6 +30,7 @@ See also: `docs/INTEGRATION.md` (configuration) and `docs/OPERATIONS.md` (operat
 - Align agent metadata (`approval_policy`, `sandbox_mode`) with Codex profiles (profiles enforce behavior).
 - Favor approvals (`on-request`) for high‑risk work; relax intentionally and sparingly.
 - Prefer `git worktree` for large/sensitive repos; avoid `mirror_repo` unless necessary.
+- Use `SUBAGENTS_EXEC_TIMEOUT_MS` to cap `codex exec` runtime in CI and prevent hanging processes (defaults to `2000`ms).
 
 ## Agent Hygiene
 - Store agents in a reviewed directory (`--agents-dir` or `CODEX_SUBAGENTS_DIR`).

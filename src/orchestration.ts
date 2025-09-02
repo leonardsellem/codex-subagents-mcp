@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync, renameSync } from '
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { DelegateParams } from './codex-subagents.mcp';
+import { tmpdir } from 'os';
 
 export type Step = {
   id: string;
@@ -73,10 +74,18 @@ export function finalize(todo: Todo, summary: string, status: 'done' | 'canceled
 }
 
 export function routeThroughOrchestrator(params: DelegateParams) {
-  const cwd = params.cwd ?? process.cwd();
+  const preferredCwd = params.cwd ?? process.cwd();
   const request_id = params.request_id || randomUUID();
-  const root = join(cwd, 'orchestration', request_id);
-  mkdirSync(root, { recursive: true });
+  // Ensure we have a writable orchestration directory, fallback to tmp if needed
+  let cwdUsed = preferredCwd;
+  let root = join(cwdUsed, 'orchestration', request_id);
+  try {
+    mkdirSync(root, { recursive: true });
+  } catch {
+    cwdUsed = join(tmpdir(), 'codex-subagents');
+    root = join(cwdUsed, 'orchestration', request_id);
+    mkdirSync(root, { recursive: true });
+  }
   const todoFile = join(root, 'todo.json');
   if (!existsSync(todoFile)) {
     const todo: Todo = {
@@ -89,14 +98,14 @@ export function routeThroughOrchestrator(params: DelegateParams) {
       next_actions: [],
       summary: null,
     };
-    saveTodo(todo, cwd);
+    saveTodo(todo, cwdUsed);
   }
   const envelope = [
     '[[ORCH-ENVELOPE]]',
     JSON.stringify({
       request_id,
       requested_agent: params.agent,
-      cwd: params.cwd ?? null,
+      cwd: cwdUsed,
       mirror_repo: params.mirror_repo ?? false,
       profile: params.profile ?? null,
       has_persona: Boolean(params.persona),
@@ -105,6 +114,5 @@ export function routeThroughOrchestrator(params: DelegateParams) {
     '',
     params.task,
   ].join('\n');
-  return { agent: 'orchestrator', task: envelope, request_id };
+  return { agent: 'orchestrator', task: envelope, request_id, cwd: cwdUsed } as unknown as DelegateParams & { agent: 'orchestrator' };
 }
-
