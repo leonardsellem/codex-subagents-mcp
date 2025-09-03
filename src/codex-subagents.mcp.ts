@@ -324,18 +324,28 @@ export async function delegateHandler(params: unknown) {
       );
     }
   }
+  // Safety net: attach nested steps to active orchestration if token/request_id omitted
+  if (
+    p.agent !== 'orchestrator' &&
+    p.token !== ORCHESTRATOR_TOKEN &&
+    !p.request_id &&
+    CURRENT_ORCHESTRATION_REQUEST_ID
+  ) {
+    p.request_id = CURRENT_ORCHESTRATION_REQUEST_ID;
+    p.token = ORCHESTRATOR_TOKEN;
+  }
   // Token gating & routing
   if (p.agent !== 'orchestrator') {
     if (p.token !== ORCHESTRATOR_TOKEN) {
       if (p.request_id) {
         return failure('Only orchestrator can delegate. Pass server-injected token.');
       }
-      const routed = routeThroughOrchestrator(p);
+      const routed = routeThroughOrchestrator(p, CURRENT_ORCHESTRATION_REQUEST_ID);
       return delegateHandler({ ...p, ...routed });
     }
   } else {
     if (!p.request_id) {
-      const routed = routeThroughOrchestrator(p);
+      const routed = routeThroughOrchestrator(p, CURRENT_ORCHESTRATION_REQUEST_ID);
       p.request_id = routed.request_id;
       p.task = routed.task;
       // Propagate the writable cwd chosen by the router (may fallback to tmp)
@@ -548,11 +558,11 @@ export async function logEventHandler(params: unknown) {
     return { ok: false };
   }
   const incoming = parsed.data as Partial<LogEvent> & { [k: string]: unknown };
-  let effectiveRunId = incoming.run_id;
-  if (!effectiveRunId && CURRENT_ORCHESTRATION_REQUEST_ID) effectiveRunId = CURRENT_ORCHESTRATION_REQUEST_ID;
-  if (!effectiveRunId && typeof process.env.CODEX_RUN_ID === 'string' && process.env.CODEX_RUN_ID.length > 0) {
-    effectiveRunId = process.env.CODEX_RUN_ID;
-  }
+  const envRunId =
+    typeof process.env.CODEX_RUN_ID === 'string' && process.env.CODEX_RUN_ID.length > 0
+      ? process.env.CODEX_RUN_ID
+      : undefined;
+  const effectiveRunId = CURRENT_ORCHESTRATION_REQUEST_ID || envRunId || incoming.run_id;
   if (!effectiveRunId) {
     return { ok: false };
   }

@@ -152,9 +152,9 @@ export function applyOrchestratorMarkersToTodo(request_id: string, cwd: string, 
   }
 }
 
-export function routeThroughOrchestrator(params: DelegateParams) {
+export function routeThroughOrchestrator(params: DelegateParams, activeRequestId?: string) {
   const preferredCwd = params.cwd ?? process.cwd();
-  const request_id = params.request_id || randomUUID();
+  const request_id = params.request_id || activeRequestId || randomUUID();
   // Ensure we have a writable orchestration directory, fallback to tmp if needed
   let cwdUsed = preferredCwd;
   let root = join(cwdUsed, 'orchestration', request_id);
