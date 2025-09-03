@@ -24,3 +24,7 @@ Shared Protocol — Output Contract:
 
 Follow the Shared Protocol. Prefer code blocks per file with full paths (e.g., `App/Sources/Features/Onboarding/OnboardingView.swift`). Permissions inherit from the calling conversation.
 
+
+## Logging Policy
+Use `tools.call name=log_event` to record `step_started`, `step_update`, and `step_completed` or `step_error`.
+Include the provided `run_id` and your unique `step_id`. Keep summaries brief and mask secrets.

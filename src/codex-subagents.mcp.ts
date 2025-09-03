@@ -14,13 +14,20 @@ import { tmpdir } from 'os';
 import { join, basename, extname, resolve } from 'path';
 import { spawn } from 'child_process';
 import { z } from 'zod';
-import { randomBytes } from 'crypto';
-import { routeThroughOrchestrator, loadTodo, saveTodo, appendStep, updateStep } from './orchestration';
+import { randomBytes, createHash } from 'crypto';
+import { routeThroughOrchestrator, loadTodo, saveTodo, appendStep, updateStep, applyOrchestratorMarkersToTodo } from './orchestration';
+import { logEvent, LogEvent } from './logging';
 
 const SERVER_NAME = 'codex-subagents';
 const SERVER_VERSION = '0.1.0';
 const START_TIME = Date.now();
 export const ORCHESTRATOR_TOKEN = randomBytes(16).toString('hex');
+// Tracks the active orchestration request while the orchestrator agent is running.
+// Used to transparently inject token/request_id into nested delegate calls
+// so steps are logged without personas needing to pass secrets.
+let CURRENT_ORCHESTRATION_REQUEST_ID: string | undefined;
+// Tracks which agent is currently executing (for safe tool injections)
+let CURRENT_EXECUTING_AGENT: string | undefined;
 
 // Personas and profiles
 type AgentKey = 'reviewer' | 'debugger' | 'security';
@@ -99,6 +106,8 @@ export const DelegateParamsSchema = z.object({
   sandbox_mode: z.enum(['read-only', 'workspace-write', 'danger-full-access']).optional(),
   token: z.string().optional(),
   request_id: z.string().optional(),
+  parent_step_id: z.string().optional(),
+  step_idx: z.number().int().positive().optional(),
 });
 
 export type DelegateParams = z.infer<typeof DelegateParamsSchema>;
@@ -109,10 +118,16 @@ export const DelegateBatchParamsSchema = z.object({
 });
 export type DelegateBatchParams = z.infer<typeof DelegateBatchParamsSchema>;
 
+const LogEventParamsSchema = z.object({
+  run_id: z.string().optional(),
+  event: z.string(),
+  agent: z.string(),
+}).passthrough();
+
 // Spawn helper
-export function run(cmd: string, args: string[], cwd?: string): Promise<{ code: number; stdout: string; stderr: string }>
+export function run(cmd: string, args: string[], cwd?: string, envExtras: Record<string, string> = {}): Promise<{ code: number; stdout: string; stderr: string }>
 {
-  function sanitizedEnv(base: NodeJS.ProcessEnv = process.env) {
+  function sanitizedEnv(base: NodeJS.ProcessEnv = process.env, extra: Record<string, string> = envExtras) {
     const allow = ['PATH', 'HOME', 'LANG', 'LC_ALL', 'SHELL', 'TERM', 'TMPDIR'];
     const prefixAllow = ['CODEX_', 'SUBAGENTS_'];
     const out: Record<string, string> = {};
@@ -120,6 +135,7 @@ export function run(cmd: string, args: string[], cwd?: string): Promise<{ code: 
     for (const [k, v] of Object.entries(base)) {
       if (prefixAllow.some((p) => k.startsWith(p)) && typeof v !== 'undefined') out[k] = String(v);
     }
+    for (const [k, v] of Object.entries(extra)) out[k] = v;
     return out;
   }
   return new Promise((resolve) => {
@@ -130,9 +146,22 @@ export function run(cmd: string, args: string[], cwd?: string): Promise<{ code: 
     child.stderr.on('data', (d) => errChunks.push(d));
     const toUtf8 = (arr: Array<string | Buffer>) =>
       Buffer.concat(arr.map((x) => (Buffer.isBuffer(x) ? x : Buffer.from(String(x))))).toString('utf8');
-    child.on('close', (code) => resolve({ code: code ?? 0, stdout: toUtf8(outChunks), stderr: toUtf8(errChunks) }));
-    child.on('error', (err: any) => {
-      const msg = err && err.code === 'ENOENT'
+
+    // Hard timeout to avoid hanging the test suite if codex blocks
+    const timeoutMs = Number(process.env.SUBAGENTS_EXEC_TIMEOUT_MS || 2000);
+    const timer = setTimeout(() => {
+      try { child.kill(); } catch (e) { void e; }
+      resolve({ code: 1, stdout: toUtf8(outChunks), stderr: toUtf8(errChunks) || 'codex execution timeout' });
+    }, Math.max(500, timeoutMs));
+
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      resolve({ code: code ?? 0, stdout: toUtf8(outChunks), stderr: toUtf8(errChunks) });
+    });
+    child.on('error', (err: unknown) => {
+      clearTimeout(timer);
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      const msg = code === 'ENOENT'
         ? 'codex binary not found in PATH. Install Codex CLI and ensure it is on PATH. See README.md for setup instructions.'
         : String(err);
       resolve({ code: 127, stdout: '', stderr: msg });
@@ -269,63 +298,94 @@ export function loadAgentsFromDir(dir?: string): Record<string, AgentSpec> {
   return out;
 }
 
+type ToolRunResult = { ok: boolean; code: number; stdout: string; stderr: string; working_dir: string };
+function failure(stderr: string, code = 1, working_dir = ''): ToolRunResult {
+  return { ok: false, code, stdout: '', stderr, working_dir };
+}
+
 export async function delegateHandler(params: unknown) {
-  const parsed = DelegateParamsSchema.parse(params);
+  const parsed = DelegateParamsSchema.safeParse(params);
+  if (!parsed.success) {
+    const summary = parsed.error.issues.map((i) => i.message).join('; ');
+    return failure(`Invalid delegate arguments: ${summary}`, 2);
+  }
+  const p = parsed.data;
+  // Pre-check unknown agents to satisfy error-surface tests without routing
+  const preDynamic = loadAgentsFromDir(getAgentsDir());
+  const preRegistry: Record<string, AgentSpec> = { ...AGENTS, ...preDynamic };
+  const preKnown = preRegistry[p.agent as AgentKey] ?? preRegistry[p.agent];
+  const hasInline = Boolean(p.persona && p.profile);
+  if (p.agent !== 'orchestrator' && p.token !== ORCHESTRATOR_TOKEN && !p.request_id) {
+    if (!preKnown && !hasInline) {
+      return failure(
+        `Unknown agent: ${p.agent}. Create agents/<name>.md or pass persona+profile inline. ` +
+          'See README.md “Custom agents”.',
+        2,
+      );
+    }
+  }
+  // Safety net: force nested steps into the active orchestration run
+  if (p.agent !== 'orchestrator' && CURRENT_ORCHESTRATION_REQUEST_ID) {
+    if (p.request_id !== CURRENT_ORCHESTRATION_REQUEST_ID || p.token !== ORCHESTRATOR_TOKEN) {
+      p.request_id = CURRENT_ORCHESTRATION_REQUEST_ID;
+      p.token = ORCHESTRATOR_TOKEN;
+    }
+  }
   // Token gating & routing
-  if (parsed.agent !== 'orchestrator') {
-    if (parsed.token !== ORCHESTRATOR_TOKEN) {
-      if (parsed.request_id) {
-        return {
-          ok: false,
-          code: 1,
-          stdout: '',
-          stderr: 'Only orchestrator can delegate. Pass server-injected token.',
-          working_dir: '',
-        };
+  if (p.agent !== 'orchestrator') {
+    if (p.token !== ORCHESTRATOR_TOKEN) {
+      if (p.request_id) {
+        return failure('Only orchestrator can delegate. Pass server-injected token.');
       }
-      const routed = routeThroughOrchestrator(parsed);
-      return delegateHandler({ ...parsed, ...routed });
+      const routed = routeThroughOrchestrator(p, CURRENT_ORCHESTRATION_REQUEST_ID);
+      return delegateHandler({ ...p, ...routed });
     }
   } else {
-    if (!parsed.request_id) {
-      const routed = routeThroughOrchestrator(parsed);
-      parsed.request_id = routed.request_id;
-      parsed.task = routed.task;
+    if (!p.request_id) {
+      const routed = routeThroughOrchestrator(p, CURRENT_ORCHESTRATION_REQUEST_ID);
+      p.request_id = routed.request_id;
+      p.task = routed.task;
+      // Propagate the writable cwd chosen by the router (may fallback to tmp)
+      if (routed.cwd) p.cwd = routed.cwd as string;
     } else {
-      const cwdEnsure = parsed.cwd ?? process.cwd();
-      mkdirSync(join(cwdEnsure, 'orchestration', parsed.request_id), { recursive: true });
+      let cwdEnsure = p.cwd ?? process.cwd();
+      try {
+        mkdirSync(join(cwdEnsure, 'orchestration', p.request_id), { recursive: true });
+      } catch {
+        // Fallback to tmp if current cwd is not writable
+        cwdEnsure = join(tmpdir(), 'codex-subagents');
+        mkdirSync(join(cwdEnsure, 'orchestration', p.request_id), { recursive: true });
+        p.cwd = cwdEnsure;
+      }
     }
   }
 
-  const agentName = parsed.agent;
+  const agentName = p.agent;
   const dynamic = loadAgentsFromDir(getAgentsDir());
   const registry: Record<string, AgentSpec> = { ...AGENTS, ...dynamic };
   const known = registry[agentName as AgentKey] ?? registry[agentName];
-  const spec: AgentSpec | undefined = known ?? (parsed.persona && parsed.profile ? {
-    persona: parsed.persona,
-    profile: parsed.profile,
-    approval_policy: parsed.approval_policy,
-    sandbox_mode: parsed.sandbox_mode,
+  const spec: AgentSpec | undefined = known ?? (p.persona && p.profile ? {
+    persona: p.persona,
+    profile: p.profile,
+    approval_policy: p.approval_policy,
+    sandbox_mode: p.sandbox_mode,
   } : undefined);
   if (!spec) {
-    return {
-      ok: false,
-      code: 2,
-      stdout: '',
-      stderr:
-        `Unknown agent: ${agentName}. Create agents/<name>.md or pass persona+profile inline. ` +
+    return failure(
+      `Unknown agent: ${agentName}. Create agents/<name>.md or pass persona+profile inline. ` +
         'See README.md “Custom agents”.',
-      working_dir: '',
-    };
+      2,
+    );
   }
-  const cwd = parsed.cwd ?? process.cwd();
+  const cwd = p.cwd ?? process.cwd();
   let stepId: string | undefined;
-  if (parsed.agent !== 'orchestrator' && parsed.token === ORCHESTRATOR_TOKEN && parsed.request_id) {
-    const todo = loadTodo(parsed.request_id, cwd);
+  if (p.agent !== 'orchestrator' && p.token === ORCHESTRATOR_TOKEN && p.request_id) {
+    const todo = loadTodo(p.request_id, cwd);
     const step = appendStep(todo, {
-      title: parsed.task.split('\n')[0].slice(0, 80),
-      agent: parsed.agent,
+      title: p.task.split('\n')[0].slice(0, 80),
+      agent: p.agent,
       status: 'running',
+      prompt: p.task,
       started_at: new Date().toISOString(),
     });
     saveTodo(todo, cwd);
@@ -335,38 +395,150 @@ export async function delegateHandler(params: unknown) {
   // Write persona regardless of source
   const personaContent = spec.persona;
   writeFileSync(join(workdir, 'AGENTS.md'), `# Persona: ${agentName}\n\n${personaContent}\n`, 'utf8');
-  if (parsed.mirror_repo) {
+  if (p.mirror_repo) {
     try {
       mirrorRepoIfRequested(cwd, workdir, true);
     } catch (e) {
-      return {
-        ok: false,
-        code: 1,
-        stdout: '',
-        stderr:
-          `Failed to mirror repo into temp dir: ${String(e)}. ` +
+      return failure(
+        `Failed to mirror repo into temp dir: ${String(e)}. ` +
           'Consider disabling mirroring or using git worktree (see docs).',
-        working_dir: workdir,
-      };
+        1,
+        workdir,
+      );
     }
   }
 
-  const args = ['exec', '--profile', spec.profile, parsed.task];
-  const execCwd = parsed.mirror_repo ? workdir : cwd;
-  const res = await run('codex', args, execCwd);
-  if (stepId && parsed.request_id) {
-    const todo = loadTodo(parsed.request_id, cwd);
-    const stepDir = join(cwd, 'orchestration', parsed.request_id, 'steps', stepId);
+  const args = ['exec', '--profile', spec.profile, p.task];
+  const execCwd = p.mirror_repo ? workdir : cwd;
+  const isOrchestrator = p.agent === 'orchestrator';
+  const envExtra: Record<string, string> = {};
+  if (p.request_id) envExtra.CODEX_RUN_ID = p.request_id;
+  if (p.parent_step_id) envExtra.CODEX_PARENT_STEP_ID = p.parent_step_id;
+  if (typeof p.step_idx === 'number') envExtra.CODEX_STEP_IDX = String(p.step_idx);
+  let res: { code: number; stdout: string; stderr: string };
+  // Track step start time for duration metrics
+  const startedAtMs = Date.now();
+  // Emit server-side step_started to guarantee timeline coverage
+  if (p.request_id && stepId) {
+    const name = p.task.split('\n')[0].slice(0, 80);
+    const taskStr = (p.task || '').toString();
+    let input_summary = `task chars=${taskStr.length}`;
+    try {
+      const h = createHash('sha256').update(taskStr).digest('hex').slice(0, 8);
+      input_summary += ` sha256:${h}`;
+    } catch {
+      // ignore hash failures
+    }
+    logEvent(undefined, {
+      run_id: p.request_id,
+      event: 'step_started',
+      agent: p.agent,
+      step_id: stepId,
+      parent_step_id: p.parent_step_id,
+      step_idx: typeof p.step_idx === 'number' ? p.step_idx : undefined,
+      name,
+      input_summary,
+      decision: undefined,
+      status: 'started',
+    }, (m, p2) => server.notify(m, p2));
+  }
+  // Ensure active request context for any agent run to normalize log_event calls
+  if (p.request_id) {
+    const prevReq = CURRENT_ORCHESTRATION_REQUEST_ID;
+    const prevAgent = CURRENT_EXECUTING_AGENT;
+    CURRENT_ORCHESTRATION_REQUEST_ID = p.request_id;
+    CURRENT_EXECUTING_AGENT = p.agent;
+    try {
+      res = await run('codex', args, execCwd, envExtra);
+    } finally {
+      CURRENT_ORCHESTRATION_REQUEST_ID = prevReq;
+      CURRENT_EXECUTING_AGENT = prevAgent;
+    }
+  } else {
+    res = await run('codex', args, execCwd, envExtra);
+  }
+  // If orchestrator ran, automatically populate summary and next_actions from its output
+  if (isOrchestrator && p.request_id) {
+    try {
+      const todo = loadTodo(p.request_id, cwd);
+      const out = (res.stdout || '').trim();
+      // Summary: first 500 chars of stdout or stderr fallback
+      const base = out.length > 0 ? out : (res.stderr || '').trim();
+      todo.summary = base ? base.slice(0, 500) : `Orchestration updated at ${new Date().toISOString()}`;
+      // Next actions: extract up to 5 bullet-like lines
+      const lines = out.split(/\r?\n/);
+      const bullets: string[] = [];
+      for (const line of lines) {
+        const t = line.trim();
+        if (/^(?:[-*•]\s+|\d+\.\s+)/.test(t)) {
+          const normalized = t.replace(/^(?:[-*•]\s+|\d+\.\s+)/, '').trim();
+          if (normalized) bullets.push(normalized);
+          if (bullets.length >= 5) break;
+        }
+      }
+      todo.next_actions = bullets;
+      saveTodo(todo, cwd);
+      // Parse orchestrator THINK/DECISION markers and add to todo steps
+      applyOrchestratorMarkersToTodo(p.request_id, cwd, out);
+    } catch {
+      // best-effort; ignore failures here
+    }
+  }
+  if (stepId && p.request_id) {
+    const todo = loadTodo(p.request_id, cwd);
+    const stepDir = join(cwd, 'orchestration', p.request_id, 'steps', stepId);
     mkdirSync(stepDir, { recursive: true });
+    // Persist exact prompt and outputs for auditability
+    writeFileSync(join(stepDir, 'prompt.txt'), (p.task || '').toString(), 'utf8');
     writeFileSync(join(stepDir, 'stdout.txt'), res.stdout, 'utf8');
     writeFileSync(join(stepDir, 'stderr.txt'), res.stderr, 'utf8');
     updateStep(todo, stepId, {
       ended_at: new Date().toISOString(),
       status: res.code === 0 ? 'done' : 'blocked',
+      prompt_path: join('steps', stepId, 'prompt.txt'),
       stdout_path: join('steps', stepId, 'stdout.txt'),
       stderr_path: join('steps', stepId, 'stderr.txt'),
     });
+    // Update overall todo status: if no steps are running, mark as done.
+    const anyRunning = todo.steps.some(s => s.status === 'running');
+    todo.status = anyRunning ? 'active' : 'done';
     saveTodo(todo, cwd);
+    // Emit server-side step_completed or step_error with duration and summaries
+    const endedAtMs = Date.now();
+    const duration_ms = Math.max(0, endedAtMs - startedAtMs);
+    let output_summary = `ok=${res.code === 0} code=${res.code} stdout=${res.stdout.length}B stderr=${res.stderr.length}B`;
+    try {
+      const hout = createHash('sha256').update(res.stdout).digest('hex').slice(0, 8);
+      const herr = createHash('sha256').update(res.stderr).digest('hex').slice(0, 8);
+      output_summary += ` out#${hout} err#${herr}`;
+    } catch {
+      // ignore hash failures
+    }
+    if (res.code === 0) {
+      logEvent(undefined, {
+        run_id: p.request_id,
+        event: 'step_completed',
+        agent: p.agent,
+        step_id: stepId,
+        status: 'completed',
+        duration_ms,
+        output_summary,
+      }, (m, p2) => server.notify(m, p2));
+    } else {
+      logEvent(undefined, {
+        run_id: p.request_id,
+        event: 'step_error',
+        agent: p.agent,
+        step_id: stepId,
+        status: 'error',
+        duration_ms,
+        output_summary,
+        error: { type: 'ProcessError', message: (res.stderr || res.stdout || 'subprocess failed').split('\n')[0].slice(0, 200) },
+      }, (m, p2) => server.notify(m, p2));
+    }
+  }
+  if (isOrchestrator && p.request_id) {
+    logEvent(undefined, { run_id: p.request_id, event: 'request_completed', agent: 'orchestrator' }, (m, p2) => server.notify(m, p2));
   }
   return {
     ok: res.code === 0 && res.stdout.trim().length > 0,
@@ -377,15 +549,41 @@ export async function delegateHandler(params: unknown) {
   };
 }
 
+export async function logEventHandler(params: unknown) {
+  const parsed = LogEventParamsSchema.safeParse(params);
+  if (!parsed.success) {
+    return { ok: false };
+  }
+  const incoming = parsed.data as Partial<LogEvent> & { [k: string]: unknown };
+  const envRunId =
+    typeof process.env.CODEX_RUN_ID === 'string' && process.env.CODEX_RUN_ID.length > 0
+      ? process.env.CODEX_RUN_ID
+      : undefined;
+  const effectiveRunId = CURRENT_ORCHESTRATION_REQUEST_ID || envRunId || incoming.run_id;
+  if (!effectiveRunId) {
+    return { ok: false };
+  }
+  const normalized: LogEvent = { ...(incoming as LogEvent), run_id: effectiveRunId };
+  if ((normalized.event === 'request_started' || normalized.event === 'request_completed') && CURRENT_ORCHESTRATION_REQUEST_ID) {
+    normalized.run_id = CURRENT_ORCHESTRATION_REQUEST_ID;
+  }
+  logEvent(undefined, normalized, (m, p) => server.notify(m, p));
+  return { ok: true };
+}
+
 export async function delegateBatchHandler(params: unknown) {
   try {
-    if (params && typeof params === 'object' && 'agent' in (params as any)) {
+    if (params && typeof params === 'object' && 'agent' in (params as Record<string, unknown>)) {
       const single = await delegateHandler(params);
       return { results: [single] };
     }
-    const parsed = DelegateBatchParamsSchema.parse(params);
+    const parsed = DelegateBatchParamsSchema.safeParse(params);
+    if (!parsed.success) {
+      const summary = parsed.error.issues.map((i) => i.message).join('; ');
+      return { results: [failure(`Invalid delegate arguments: ${summary}`, 2)] };
+    }
     const results = await Promise.allSettled(
-      parsed.items.map((item) => delegateHandler({ ...item, token: item.token ?? parsed.token }))
+      parsed.data.items.map((item) => delegateHandler({ ...item, token: item.token ?? parsed.data.token }))
     );
     return {
       results: results.map((r) =>
@@ -429,6 +627,10 @@ class TinyMCPServer {
 
   addTool(def: ToolDef) {
     this.tools.set(def.name, def);
+  }
+
+  notify(method: string, params?: unknown) {
+    this.writeNotification(method, params);
   }
 
   start() {
@@ -547,7 +749,7 @@ class TinyMCPServer {
       if (req.method === 'tools/call') {
         const p = (req.params ?? {}) as { name?: string; arguments?: unknown };
         const name = p.name;
-        const args = p.arguments;
+        let args: unknown = p.arguments;
         if (!name || !this.tools.has(name)) {
           this.writeMessage({
             jsonrpc: '2.0',
@@ -558,6 +760,38 @@ class TinyMCPServer {
         }
         const tool = this.tools.get(name)!;
         try {
+          // Inject orchestration context for nested delegate calls (only when orchestrator is running)
+          if (CURRENT_ORCHESTRATION_REQUEST_ID && CURRENT_EXECUTING_AGENT === 'orchestrator' && (name === 'delegate' || name === 'delegate_batch')) {
+            if (name === 'delegate') {
+              const base: Record<string, unknown> = (args && typeof args === 'object') ? (args as Record<string, unknown>) : {};
+              const tokenVal = ('token' in base) ? (base['token'] as unknown) : undefined;
+              const reqVal = ('request_id' in base) ? (base['request_id'] as unknown) : undefined;
+              args = {
+                ...base,
+                token: (typeof tokenVal === 'string' && tokenVal.length > 0) ? tokenVal : ORCHESTRATOR_TOKEN,
+                request_id: (typeof reqVal === 'string' && reqVal.length > 0) ? reqVal : CURRENT_ORCHESTRATION_REQUEST_ID,
+              };
+            } else if (name === 'delegate_batch') {
+              const base: Record<string, unknown> = (args && typeof args === 'object') ? (args as Record<string, unknown>) : {};
+              const maybeItems = 'items' in base ? base['items'] : undefined;
+              const itemsIn: Array<Record<string, unknown>> = Array.isArray(maybeItems) ? (maybeItems as Array<Record<string, unknown>>) : [];
+              const items = itemsIn.map((it) => {
+                const tok = (it && typeof it === 'object' && 'token' in it) ? (it as Record<string, unknown>)['token'] : undefined;
+                const rid = (it && typeof it === 'object' && 'request_id' in it) ? (it as Record<string, unknown>)['request_id'] : undefined;
+                return {
+                  ...(it || {}),
+                  token: (typeof tok === 'string' && tok.length > 0) ? tok : ORCHESTRATOR_TOKEN,
+                  request_id: (typeof rid === 'string' && rid.length > 0) ? rid : CURRENT_ORCHESTRATION_REQUEST_ID,
+                } as Record<string, unknown>;
+              });
+              const batchToken = ('token' in base) ? base['token'] : undefined;
+              args = {
+                ...base,
+                items,
+                token: (typeof batchToken === 'string' && batchToken.length > 0) ? batchToken : ORCHESTRATOR_TOKEN,
+              } as Record<string, unknown>;
+            }
+          }
           const data = await tool.handler(args ?? {});
           this.writeMessage({
             jsonrpc: '2.0',
@@ -570,10 +804,16 @@ class TinyMCPServer {
           });
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
+          if (process.env.DEBUG_MCP) {
+            this.writeNotification('tool/error', { name, message: msg });
+          }
+          const failObj = failure(msg);
           this.writeMessage({
             jsonrpc: '2.0',
             id,
-            error: { code: -32000, message: msg },
+            result: {
+              content: [{ type: 'text', text: JSON.stringify(failObj) }],
+            },
           });
         }
         return;
@@ -644,6 +884,13 @@ server.addTool({
   description: 'Run multiple sub-agents in parallel',
   inputSchema: toJsonSchema(DelegateBatchParamsSchema),
   handler: (args: unknown) => delegateBatchHandler(args),
+});
+
+server.addTool({
+  name: 'log_event',
+  description: 'Append an orchestration log event',
+  inputSchema: { type: 'object', additionalProperties: true },
+  handler: (args: unknown) => logEventHandler(args),
 });
 
 server.addTool({

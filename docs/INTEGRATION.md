@@ -40,6 +40,12 @@ The MCP tool `delegate`:
 4. Spawns `codex exec --profile <agent-profile> "<task>"` with `cwd` set appropriately.
 5. Returns `{ ok, code, stdout, stderr, working_dir }` to the calling thread.
 
+While the orchestrator is running, the server transparently injects an internal token and the current `request_id` into nested calls to `delegate` and `delegate_batch`, so steps are logged without personas passing secrets.
+
+Each request logs to `orchestration/<request_id>/`:
+- `todo.json` with `{ request_id, created_at, user_prompt, requested_agent, status, steps[], next_actions[], summary }`
+- Per‑step outputs in `steps/<step-id>/stdout.txt` and `stderr.txt`
+
 ### Custom agents
 
 Point the server to a directory of agent definitions:
@@ -69,6 +75,10 @@ Validated frontmatter/JSON keys:
 These are validated and treated as advisory metadata; align your Codex profiles accordingly.
 
 Defaults for agents directory (when neither arg nor env are provided): `./agents`, `./.codex-subagents/agents`, then `dist/../agents`.
+
+### Environment
+
+- `SUBAGENTS_EXEC_TIMEOUT_MS` — timeout for `codex exec` (ms). Default `2000`. Ensures CI/tests don’t hang on slow or missing binaries.
 
 List agents:
 

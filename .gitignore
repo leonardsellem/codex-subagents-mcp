@@ -9,3 +9,5 @@ MARKETING.md
 RELEASE_CHECKLIST.md
 
 orchestration/
+
+.tmp/

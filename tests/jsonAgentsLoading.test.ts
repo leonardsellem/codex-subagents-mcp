@@ -8,12 +8,12 @@ describe('JSON agents personaFile', () => {
   it('loads persona from personaFile path', () => {
     const dir = mkdtempSync(join(tmpdir(), 'agents-json-'));
     writeFileSync(join(dir, 'body.txt'), 'JSON persona here.', 'utf8');
-    const json = {
+    const json: Record<string, unknown> = {
       profile: 'reviewer',
       personaFile: 'body.txt',
       approval_policy: 'on-request',
       sandbox_mode: 'read-only',
-    } as any;
+    };
     writeFileSync(join(dir, 'review.json'), JSON.stringify(json), 'utf8');
     const reg = loadAgentsFromDir(dir);
     expect(reg.review.profile).toBe('reviewer');

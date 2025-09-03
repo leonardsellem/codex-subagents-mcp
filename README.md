@@ -68,6 +68,26 @@ subagents.delegate(agent="review", task="Summarize and review the last commit")
 
 Tip: See `docs/SECURITY.md` for trust boundaries and `docs/OPERATIONS.md` for E2E and logging.
 
+## Orchestration & Logs
+
+When you delegate a task, the server creates a per‑request folder under `orchestration/<request_id>/` and tracks execution:
+
+- `todo.json`: top‑level state
+  - `request_id`, `created_at`, `user_prompt`, `requested_agent`
+  - `status`: `active | done | canceled` (auto‑updates to `done` when no steps are running)
+  - `steps[]`: one entry per sub‑agent call, with `id`, `title`, `agent`, `status`, `stdout_path`, `stderr_path`, `started_at`, `ended_at`, `notes`
+  - `next_actions[]`: extracted next steps (max 5 bullet‑like lines parsed from orchestrator stdout)
+  - `summary`: short summary (first 500 chars of orchestrator stdout or stderr)
+
+- `steps/<step-id>/stdout.txt|stderr.txt`: raw outputs per step
+
+Notes:
+- Only the `orchestrator` agent can delegate; the server auto‑injects a token and the current `request_id` into nested `delegate`/`delegate_batch` calls. Personas don’t need to pass secrets.
+- Unknown agents are rejected early with a helpful error unless both `persona` and `profile` are provided inline.
+
+Environment:
+- `SUBAGENTS_EXEC_TIMEOUT_MS` — hard timeout for `codex exec` (default `2000`ms) to avoid hangs in CI/tests.
+
 ## Wiring with Codex CLI
 
  Build the server and point Codex at the **absolute** path to the compiled entrypoint. Pass the agents directory explicitly so the server doesn't scan until after the handshake. The server also falls back to an `agents/` folder adjacent to the installed binary (e.g. `dist/../agents`) if `--agents-dir` and `CODEX_SUBAGENTS_DIR` are not provided:
