@@ -16,6 +16,7 @@ import { spawn } from 'child_process';
 import { z } from 'zod';
 import { randomBytes } from 'crypto';
 import { routeThroughOrchestrator, loadTodo, saveTodo, appendStep, updateStep, applyOrchestratorMarkersToTodo } from './orchestration';
+import { logEvent, LogEvent } from './logging';
 
 const SERVER_NAME = 'codex-subagents';
 const SERVER_VERSION = '0.1.0';
@@ -103,6 +104,8 @@ export const DelegateParamsSchema = z.object({
   sandbox_mode: z.enum(['read-only', 'workspace-write', 'danger-full-access']).optional(),
   token: z.string().optional(),
   request_id: z.string().optional(),
+  parent_step_id: z.string().optional(),
+  step_idx: z.number().int().positive().optional(),
 });
 
 export type DelegateParams = z.infer<typeof DelegateParamsSchema>;
@@ -113,10 +116,16 @@ export const DelegateBatchParamsSchema = z.object({
 });
 export type DelegateBatchParams = z.infer<typeof DelegateBatchParamsSchema>;
 
+const LogEventParamsSchema = z.object({
+  run_id: z.string(),
+  event: z.string(),
+  agent: z.string(),
+}).passthrough();
+
 // Spawn helper
-export function run(cmd: string, args: string[], cwd?: string): Promise<{ code: number; stdout: string; stderr: string }>
+export function run(cmd: string, args: string[], cwd?: string, envExtras: Record<string, string> = {}): Promise<{ code: number; stdout: string; stderr: string }>
 {
-  function sanitizedEnv(base: NodeJS.ProcessEnv = process.env) {
+  function sanitizedEnv(base: NodeJS.ProcessEnv = process.env, extra: Record<string, string> = envExtras) {
     const allow = ['PATH', 'HOME', 'LANG', 'LC_ALL', 'SHELL', 'TERM', 'TMPDIR'];
     const prefixAllow = ['CODEX_', 'SUBAGENTS_'];
     const out: Record<string, string> = {};
@@ -124,6 +133,7 @@ export function run(cmd: string, args: string[], cwd?: string): Promise<{ code: 
     for (const [k, v] of Object.entries(base)) {
       if (prefixAllow.some((p) => k.startsWith(p)) && typeof v !== 'undefined') out[k] = String(v);
     }
+    for (const [k, v] of Object.entries(extra)) out[k] = v;
     return out;
   }
   return new Promise((resolve) => {
@@ -392,17 +402,21 @@ export async function delegateHandler(params: unknown) {
   const args = ['exec', '--profile', spec.profile, p.task];
   const execCwd = p.mirror_repo ? workdir : cwd;
   const isOrchestrator = p.agent === 'orchestrator';
+  const envExtra: Record<string, string> = {};
+  if (p.request_id) envExtra.CODEX_RUN_ID = p.request_id;
+  if (p.parent_step_id) envExtra.CODEX_PARENT_STEP_ID = p.parent_step_id;
+  if (typeof p.step_idx === 'number') envExtra.CODEX_STEP_IDX = String(p.step_idx);
   let res: { code: number; stdout: string; stderr: string };
   if (isOrchestrator && p.request_id) {
     const prev = CURRENT_ORCHESTRATION_REQUEST_ID;
     CURRENT_ORCHESTRATION_REQUEST_ID = p.request_id;
     try {
-      res = await run('codex', args, execCwd);
+      res = await run('codex', args, execCwd, envExtra);
     } finally {
       CURRENT_ORCHESTRATION_REQUEST_ID = prev;
     }
   } else {
-    res = await run('codex', args, execCwd);
+    res = await run('codex', args, execCwd, envExtra);
   }
   // If orchestrator ran, automatically populate summary and next_actions from its output
   if (isOrchestrator && p.request_id) {
@@ -451,6 +465,9 @@ export async function delegateHandler(params: unknown) {
     todo.status = anyRunning ? 'active' : 'done';
     saveTodo(todo, cwd);
   }
+  if (isOrchestrator && p.request_id) {
+    logEvent(undefined, { run_id: p.request_id, event: 'request_completed', agent: 'orchestrator' }, (m, p2) => server.notify(m, p2));
+  }
   return {
     ok: res.code === 0 && res.stdout.trim().length > 0,
     code: res.code,
@@ -458,6 +475,15 @@ export async function delegateHandler(params: unknown) {
     stderr: res.stderr.trim(),
     working_dir: workdir,
   };
+}
+
+export async function logEventHandler(params: unknown) {
+  const parsed = LogEventParamsSchema.safeParse(params);
+  if (!parsed.success) {
+    return { ok: false };
+  }
+  logEvent(undefined, parsed.data as LogEvent, (m, p) => server.notify(m, p));
+  return { ok: true };
 }
 
 export async function delegateBatchHandler(params: unknown) {
@@ -516,6 +542,10 @@ class TinyMCPServer {
 
   addTool(def: ToolDef) {
     this.tools.set(def.name, def);
+  }
+
+  notify(method: string, params?: unknown) {
+    this.writeNotification(method, params);
   }
 
   start() {
@@ -769,6 +799,13 @@ server.addTool({
   description: 'Run multiple sub-agents in parallel',
   inputSchema: toJsonSchema(DelegateBatchParamsSchema),
   handler: (args: unknown) => delegateBatchHandler(args),
+});
+
+server.addTool({
+  name: 'log_event',
+  description: 'Append an orchestration log event',
+  inputSchema: { type: 'object', additionalProperties: true },
+  handler: (args: unknown) => logEventHandler(args),
 });
 
 server.addTool({

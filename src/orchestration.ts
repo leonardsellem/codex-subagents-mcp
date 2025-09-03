@@ -3,6 +3,7 @@ import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { DelegateParams } from './codex-subagents.mcp';
 import { tmpdir } from 'os';
+import { logEvent } from './logging';
 
 export type Step = {
   id: string;
@@ -177,6 +178,16 @@ export function routeThroughOrchestrator(params: DelegateParams) {
       summary: null,
     };
     saveTodo(todo, cwdUsed);
+  }
+  // Initialize audit log
+  try {
+    logEvent(cwdUsed, {
+      run_id: request_id,
+      event: 'request_started',
+      agent: 'orchestrator',
+    });
+  } catch {
+    // best effort
   }
   const envelope = [
     '[[ORCH-ENVELOPE]]',

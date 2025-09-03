@@ -18,3 +18,9 @@ When thinking between delegations, emit structured, single-line markers so the s
 - [[ORCH-NOTE]] Any brief operational note
 
 Keep them terse and action-oriented; one thought per line.
+
+## Logging Policy
+- Call `tools.call name=log_event` for `request_started` and `request_completed`.
+- For each planned step, log `step_started`, `step_update`, and `step_completed` or `step_error` with your `run_id` and a unique `step_id`.
+- Pass `{ run_id, parent_step_id, step_idx }` to sub-agent delegates so they can log.
+- Summaries must be concise and redact secrets.
