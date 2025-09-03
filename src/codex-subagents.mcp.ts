@@ -14,7 +14,7 @@ import { tmpdir } from 'os';
 import { join, basename, extname, resolve } from 'path';
 import { spawn } from 'child_process';
 import { z } from 'zod';
-import { randomBytes } from 'crypto';
+import { randomBytes, createHash } from 'crypto';
 import { routeThroughOrchestrator, loadTodo, saveTodo, appendStep, updateStep, applyOrchestratorMarkersToTodo } from './orchestration';
 import { logEvent, LogEvent } from './logging';
 
@@ -26,6 +26,8 @@ export const ORCHESTRATOR_TOKEN = randomBytes(16).toString('hex');
 // Used to transparently inject token/request_id into nested delegate calls
 // so steps are logged without personas needing to pass secrets.
 let CURRENT_ORCHESTRATION_REQUEST_ID: string | undefined;
+// Tracks which agent is currently executing (for safe tool injections)
+let CURRENT_EXECUTING_AGENT: string | undefined;
 
 // Personas and profiles
 type AgentKey = 'reviewer' | 'debugger' | 'security';
@@ -117,7 +119,7 @@ export const DelegateBatchParamsSchema = z.object({
 export type DelegateBatchParams = z.infer<typeof DelegateBatchParamsSchema>;
 
 const LogEventParamsSchema = z.object({
-  run_id: z.string(),
+  run_id: z.string().optional(),
   event: z.string(),
   agent: z.string(),
 }).passthrough();
@@ -407,13 +409,43 @@ export async function delegateHandler(params: unknown) {
   if (p.parent_step_id) envExtra.CODEX_PARENT_STEP_ID = p.parent_step_id;
   if (typeof p.step_idx === 'number') envExtra.CODEX_STEP_IDX = String(p.step_idx);
   let res: { code: number; stdout: string; stderr: string };
-  if (isOrchestrator && p.request_id) {
-    const prev = CURRENT_ORCHESTRATION_REQUEST_ID;
+  // Track step start time for duration metrics
+  const startedAtMs = Date.now();
+  // Emit server-side step_started to guarantee timeline coverage
+  if (p.request_id && stepId) {
+    const name = p.task.split('\n')[0].slice(0, 80);
+    const taskStr = (p.task || '').toString();
+    let input_summary = `task chars=${taskStr.length}`;
+    try {
+      const h = createHash('sha256').update(taskStr).digest('hex').slice(0, 8);
+      input_summary += ` sha256:${h}`;
+    } catch {
+      // ignore hash failures
+    }
+    logEvent(undefined, {
+      run_id: p.request_id,
+      event: 'step_started',
+      agent: p.agent,
+      step_id: stepId,
+      parent_step_id: p.parent_step_id,
+      step_idx: typeof p.step_idx === 'number' ? p.step_idx : undefined,
+      name,
+      input_summary,
+      decision: undefined,
+      status: 'started',
+    }, (m, p2) => server.notify(m, p2));
+  }
+  // Ensure active request context for any agent run to normalize log_event calls
+  if (p.request_id) {
+    const prevReq = CURRENT_ORCHESTRATION_REQUEST_ID;
+    const prevAgent = CURRENT_EXECUTING_AGENT;
     CURRENT_ORCHESTRATION_REQUEST_ID = p.request_id;
+    CURRENT_EXECUTING_AGENT = p.agent;
     try {
       res = await run('codex', args, execCwd, envExtra);
     } finally {
-      CURRENT_ORCHESTRATION_REQUEST_ID = prev;
+      CURRENT_ORCHESTRATION_REQUEST_ID = prevReq;
+      CURRENT_EXECUTING_AGENT = prevAgent;
     }
   } else {
     res = await run('codex', args, execCwd, envExtra);
@@ -464,6 +496,39 @@ export async function delegateHandler(params: unknown) {
     const anyRunning = todo.steps.some(s => s.status === 'running');
     todo.status = anyRunning ? 'active' : 'done';
     saveTodo(todo, cwd);
+    // Emit server-side step_completed or step_error with duration and summaries
+    const endedAtMs = Date.now();
+    const duration_ms = Math.max(0, endedAtMs - startedAtMs);
+    let output_summary = `ok=${res.code === 0} code=${res.code} stdout=${res.stdout.length}B stderr=${res.stderr.length}B`;
+    try {
+      const hout = createHash('sha256').update(res.stdout).digest('hex').slice(0, 8);
+      const herr = createHash('sha256').update(res.stderr).digest('hex').slice(0, 8);
+      output_summary += ` out#${hout} err#${herr}`;
+    } catch {
+      // ignore hash failures
+    }
+    if (res.code === 0) {
+      logEvent(undefined, {
+        run_id: p.request_id,
+        event: 'step_completed',
+        agent: p.agent,
+        step_id: stepId,
+        status: 'completed',
+        duration_ms,
+        output_summary,
+      }, (m, p2) => server.notify(m, p2));
+    } else {
+      logEvent(undefined, {
+        run_id: p.request_id,
+        event: 'step_error',
+        agent: p.agent,
+        step_id: stepId,
+        status: 'error',
+        duration_ms,
+        output_summary,
+        error: { type: 'ProcessError', message: (res.stderr || res.stdout || 'subprocess failed').split('\n')[0].slice(0, 200) },
+      }, (m, p2) => server.notify(m, p2));
+    }
   }
   if (isOrchestrator && p.request_id) {
     logEvent(undefined, { run_id: p.request_id, event: 'request_completed', agent: 'orchestrator' }, (m, p2) => server.notify(m, p2));
@@ -482,7 +547,20 @@ export async function logEventHandler(params: unknown) {
   if (!parsed.success) {
     return { ok: false };
   }
-  logEvent(undefined, parsed.data as LogEvent, (m, p) => server.notify(m, p));
+  const incoming = parsed.data as Partial<LogEvent> & { [k: string]: unknown };
+  let effectiveRunId = incoming.run_id;
+  if (!effectiveRunId && CURRENT_ORCHESTRATION_REQUEST_ID) effectiveRunId = CURRENT_ORCHESTRATION_REQUEST_ID;
+  if (!effectiveRunId && typeof process.env.CODEX_RUN_ID === 'string' && process.env.CODEX_RUN_ID.length > 0) {
+    effectiveRunId = process.env.CODEX_RUN_ID;
+  }
+  if (!effectiveRunId) {
+    return { ok: false };
+  }
+  const normalized: LogEvent = { ...(incoming as LogEvent), run_id: effectiveRunId };
+  if ((normalized.event === 'request_started' || normalized.event === 'request_completed') && CURRENT_ORCHESTRATION_REQUEST_ID) {
+    normalized.run_id = CURRENT_ORCHESTRATION_REQUEST_ID;
+  }
+  logEvent(undefined, normalized, (m, p) => server.notify(m, p));
   return { ok: true };
 }
 
@@ -675,8 +753,8 @@ class TinyMCPServer {
         }
         const tool = this.tools.get(name)!;
         try {
-          // Inject orchestration context for nested delegate calls
-          if (CURRENT_ORCHESTRATION_REQUEST_ID && (name === 'delegate' || name === 'delegate_batch')) {
+          // Inject orchestration context for nested delegate calls (only when orchestrator is running)
+          if (CURRENT_ORCHESTRATION_REQUEST_ID && CURRENT_EXECUTING_AGENT === 'orchestrator' && (name === 'delegate' || name === 'delegate_batch')) {
             if (name === 'delegate') {
               const base: Record<string, unknown> = (args && typeof args === 'object') ? (args as Record<string, unknown>) : {};
               const tokenVal = ('token' in base) ? (base['token'] as unknown) : undefined;
