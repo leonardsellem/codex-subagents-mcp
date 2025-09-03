@@ -324,15 +324,12 @@ export async function delegateHandler(params: unknown) {
       );
     }
   }
-  // Safety net: attach nested steps to active orchestration if token/request_id omitted
-  if (
-    p.agent !== 'orchestrator' &&
-    p.token !== ORCHESTRATOR_TOKEN &&
-    !p.request_id &&
-    CURRENT_ORCHESTRATION_REQUEST_ID
-  ) {
-    p.request_id = CURRENT_ORCHESTRATION_REQUEST_ID;
-    p.token = ORCHESTRATOR_TOKEN;
+  // Safety net: force nested steps into the active orchestration run
+  if (p.agent !== 'orchestrator' && CURRENT_ORCHESTRATION_REQUEST_ID) {
+    if (p.request_id !== CURRENT_ORCHESTRATION_REQUEST_ID || p.token !== ORCHESTRATOR_TOKEN) {
+      p.request_id = CURRENT_ORCHESTRATION_REQUEST_ID;
+      p.token = ORCHESTRATOR_TOKEN;
+    }
   }
   // Token gating & routing
   if (p.agent !== 'orchestrator') {
