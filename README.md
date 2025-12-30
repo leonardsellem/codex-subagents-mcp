@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/leonardsellem-codex-subagents-mcp-badge.png)](https://mseep.ai/app/leonardsellem-codex-subagents-mcp)
+
 # codex-subagents-mcp
 
 [![CI](https://github.com/leonardsellem/codex-subagents-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/leonardsellem/codex-subagents-mcp/actions/workflows/ci.yml)
